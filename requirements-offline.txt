@@ -1,3 +1,4 @@
 # Keep this file aligned with requirements.txt before downloading wheels.
 PyYAML>=6.0,<7.0
 sentence-transformers>=3.0,<6.0
+chromadb>=1.5,<2.0

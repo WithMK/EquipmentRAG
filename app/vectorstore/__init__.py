@@ -1,1 +1,1 @@
-"""Persistent vector store adapters."""
+"""Vector-store adapters."""

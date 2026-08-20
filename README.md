@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 2까지 프로젝트 구조, YAML 설정 로더, 로컬 전용 Sentence Transformers 임베딩 서비스를 제공합니다. ChromaDB, C# 색인 및 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 3까지 프로젝트 구조, YAML 설정 로더, 로컬 전용 Sentence Transformers 임베딩 서비스와 영구 ChromaDB 벡터 저장소를 제공합니다. C# 색인 및 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
 
 ## 요구 환경
 
@@ -71,6 +71,29 @@ python -m app.embedding.embedding_service `
 ```
 
 출력에는 모델 경로, 임베딩 차원, 벡터 길이와 일부 미리보기만 포함됩니다. 모델 파일이나 전체 벡터는 GitHub에 저장하지 않습니다.
+
+## Phase 3: 영구 ChromaDB 벡터 저장소
+
+`PersistentChromaStore`는 로컬 `PersistentClient`와 코사인 거리를 사용합니다. 임베딩은 애플리케이션에서 미리 계산해 전달하므로 ChromaDB가 외부 모델을 다운로드하지 않으며, 익명 텔레메트리도 비활성화합니다.
+
+각 Chunk에는 다음 Metadata가 항상 저장됩니다.
+
+```text
+equipment, source_type, repository, project, file_name, file_path,
+relative_path, class_name, method_name, chunk_index, file_hash,
+modified_time, language
+```
+
+합성 C# 테스트 Chunk 두 개를 저장하고 LLM 없이 검색하려면 다음 명령을 실행합니다.
+
+```powershell
+python -m app.vectorstore.chroma_store `
+  --config config\config.yaml `
+  --seed-demo `
+  --query "Z축 원점 복귀 실패"
+```
+
+같은 명령에서 `--seed-demo`를 빼고 다시 실행하면 기존 영구 컬렉션을 그대로 검색합니다. 생성되는 `data/chroma/`는 로컬 실행 데이터이며 Git에서 제외됩니다.
 
 ## 데이터 보안
 
