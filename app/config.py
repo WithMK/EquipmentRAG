@@ -32,6 +32,8 @@ class SourceConfig:
 class EmbeddingConfig:
     model_path: Path
     batch_size: int
+    device: str | None
+    normalize_embeddings: bool
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,24 @@ def _positive_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
     return value
 
 
+def _optional_string(
+    data: Mapping[str, Any], key: str, section_name: str
+) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"'{section_name}.{key}' must be a non-empty string or null")
+    return value.strip()
+
+
+def _boolean(data: Mapping[str, Any], key: str, section_name: str) -> bool:
+    value = data.get(key)
+    if not isinstance(value, bool):
+        raise ConfigError(f"'{section_name}.{key}' must be true or false")
+    return value
+
+
 def _string_tuple(data: Mapping[str, Any], key: str, section_name: str) -> tuple[str, ...]:
     value = data.get(key)
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
@@ -174,6 +194,10 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
                 _required_string(embedding, "model_path", "embedding"), project_root
             ),
             batch_size=_positive_int(embedding, "batch_size", "embedding"),
+            device=_optional_string(embedding, "device", "embedding"),
+            normalize_embeddings=_boolean(
+                embedding, "normalize_embeddings", "embedding"
+            ),
         ),
         chromadb=ChromaConfig(
             path=_resolve_path(_required_string(chromadb, "path", "chromadb"), project_root),

@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 1에서는 프로젝트 구조와 YAML 설정 로더를 제공합니다. 임베딩, ChromaDB, C# 색인 및 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 2까지 프로젝트 구조, YAML 설정 로더, 로컬 전용 Sentence Transformers 임베딩 서비스를 제공합니다. ChromaDB, C# 색인 및 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
 
 ## 요구 환경
 
@@ -46,6 +46,31 @@ python -m app.config --config config\config.yaml
 ```
 
 두 번째 명령은 비밀정보 없이 해석된 설정 요약을 JSON으로 출력합니다.
+
+## Phase 2: 로컬 임베딩 모델
+
+BGE-M3 등 Sentence Transformers 호환 모델을 `models/` 아래에 수동으로 배치하고 설정의 `embedding.model_path`를 해당 디렉터리로 지정합니다. `models/`는 Git에서 제외되며 실행 중 모델 다운로드를 시도하지 않습니다.
+
+```yaml
+embedding:
+  model_path: ./models/bge-m3
+  batch_size: 16
+  device: null
+  normalize_embeddings: true
+```
+
+`device: null`은 사용 가능한 장치를 자동 선택합니다. CPU로 고정하려면 `device: cpu`, CUDA를 지정하려면 예를 들어 `device: cuda:0`을 사용합니다.
+
+실제 로컬 모델을 배치한 후 다음 명령으로 로딩과 벡터 생성을 확인합니다.
+
+```powershell
+python -m app.embedding.embedding_service `
+  --config config\config.yaml `
+  --task query `
+  --text "Press Z축 Home 실패"
+```
+
+출력에는 모델 경로, 임베딩 차원, 벡터 길이와 일부 미리보기만 포함됩니다. 모델 파일이나 전체 벡터는 GitHub에 저장하지 않습니다.
 
 ## 데이터 보안
 

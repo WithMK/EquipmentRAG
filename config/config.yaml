@@ -17,6 +17,8 @@ source:
 embedding:
   model_path: ./models/bge-m3
   batch_size: 16
+  device: null
+  normalize_embeddings: true
 
 chromadb:
   path: ./data/chroma

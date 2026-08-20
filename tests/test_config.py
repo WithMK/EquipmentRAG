@@ -17,6 +17,8 @@ source:
 embedding:
   model_path: ./models/bge-m3
   batch_size: 8
+  device: cpu
+  normalize_embeddings: true
 chromadb:
   path: ./data/chroma
   collection_name: equipment_code
@@ -47,6 +49,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.equipment.name, "test-equipment")
             self.assertEqual(config.source.path, (root / "data/source").resolve())
             self.assertEqual(config.embedding.model_path, (root / "models/bge-m3").resolve())
+            self.assertEqual(config.embedding.device, "cpu")
+            self.assertTrue(config.embedding.normalize_embeddings)
             self.assertEqual(config.llm.provider, "llama_cpp")
             self.assertEqual(config.llm.base_url, "http://127.0.0.1:8080/v1")
             self.assertEqual(config.logging.level, "INFO")
