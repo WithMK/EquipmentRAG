@@ -151,9 +151,9 @@ class LocalEmbeddingService:
 
     @staticmethod
     def _read_dimension(model: Any) -> int:
-        getter = getattr(model, "get_sentence_embedding_dimension", None)
+        getter = getattr(model, "get_embedding_dimension", None)
         if not callable(getter):
-            getter = getattr(model, "get_embedding_dimension", None)
+            getter = getattr(model, "get_sentence_embedding_dimension", None)
         if not callable(getter):
             raise EmbeddingError("Embedding model does not expose its output dimension")
 
