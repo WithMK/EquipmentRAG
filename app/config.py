@@ -26,6 +26,8 @@ class SourceConfig:
     path: Path
     include_extensions: tuple[str, ...]
     exclude_directories: tuple[str, ...]
+    chunk_size: int
+    chunk_overlap: int
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,13 @@ def _positive_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
     return value
 
 
+def _non_negative_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ConfigError(f"'{section_name}.{key}' must be a non-negative integer")
+    return value
+
+
 def _optional_string(
     data: Mapping[str, Any], key: str, section_name: str
 ) -> str | None:
@@ -173,6 +182,11 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     llm = _section(parsed, "llm")
     logging_config = _section(parsed, "logging")
 
+    chunk_size = _positive_int(source, "chunk_size", "source")
+    chunk_overlap = _non_negative_int(source, "chunk_overlap", "source")
+    if chunk_overlap >= chunk_size:
+        raise ConfigError("'source.chunk_overlap' must be smaller than 'source.chunk_size'")
+
     provider = _required_string(llm, "provider", "llm").lower()
     if provider not in {"llama_cpp", "ollama"}:
         raise ConfigError("'llm.provider' must be 'llama_cpp' or 'ollama'")
@@ -188,6 +202,8 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             path=_resolve_path(_required_string(source, "path", "source"), project_root),
             include_extensions=_string_tuple(source, "include_extensions", "source"),
             exclude_directories=_string_tuple(source, "exclude_directories", "source"),
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         ),
         embedding=EmbeddingConfig(
             model_path=_resolve_path(

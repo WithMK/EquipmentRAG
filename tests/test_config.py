@@ -14,6 +14,8 @@ source:
   path: ./data/source
   include_extensions: [.cs]
   exclude_directories: [bin, obj]
+  chunk_size: 4000
+  chunk_overlap: 400
 embedding:
   model_path: ./models/bge-m3
   batch_size: 8
@@ -48,6 +50,8 @@ class ConfigTests(unittest.TestCase):
 
             self.assertEqual(config.equipment.name, "test-equipment")
             self.assertEqual(config.source.path, (root / "data/source").resolve())
+            self.assertEqual(config.source.chunk_size, 4000)
+            self.assertEqual(config.source.chunk_overlap, 400)
             self.assertEqual(config.embedding.model_path, (root / "models/bge-m3").resolve())
             self.assertEqual(config.embedding.device, "cpu")
             self.assertTrue(config.embedding.normalize_embeddings)
@@ -72,6 +76,20 @@ class ConfigTests(unittest.TestCase):
     def test_rejects_missing_configuration_file(self) -> None:
         with self.assertRaisesRegex(ConfigError, "not found"):
             load_config("missing-config.yaml")
+
+    def test_rejects_chunk_overlap_not_smaller_than_chunk_size(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            config_path = config_dir / "config.yaml"
+            config_path.write_text(
+                VALID_CONFIG.replace("chunk_overlap: 400", "chunk_overlap: 4000"),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "chunk_overlap.*smaller"):
+                load_config(config_path)
 
 
 if __name__ == "__main__":

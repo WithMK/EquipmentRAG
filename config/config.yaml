@@ -13,6 +13,8 @@ source:
     - Debug
     - Release
     - packages
+  chunk_size: 4000
+  chunk_overlap: 400
 
 embedding:
   model_path: ./models/bge-m3

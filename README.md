@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 3까지 프로젝트 구조, YAML 설정 로더, 로컬 전용 Sentence Transformers 임베딩 서비스와 영구 ChromaDB 벡터 저장소를 제공합니다. C# 색인 및 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 4까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 소스 탐색 및 구조 기반 Chunking을 제공합니다. 증분 색인과 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
 
 ## 요구 환경
 
@@ -94,6 +94,26 @@ python -m app.vectorstore.chroma_store `
 ```
 
 같은 명령에서 `--seed-demo`를 빼고 다시 실행하면 기존 영구 컬렉션을 그대로 검색합니다. 생성되는 `data/chroma/`는 로컬 실행 데이터이며 Git에서 제외됩니다.
+
+## Phase 4: C# 소스 탐색 및 Chunking
+
+스캐너는 설정한 소스 폴더를 재귀 탐색하고 제외 디렉터리를 가지치기합니다. 확장자는 대소문자를 구분하지 않으며 UTF-8/BOM, UTF-16, CP949를 지원합니다. 각 파일의 원본 바이트 SHA-256과 UTC 수정 시각도 계산합니다.
+
+청커는 Roslyn 없이 namespace, type, method, `#region`, XML/일반 주석을 가능한 범위에서 인식합니다. 메서드 경계를 우선 사용하고 긴 코드는 원본 줄 단위로 분할합니다. 구조를 찾지 못하면 안전한 크기 기반 Chunking으로 전환하며 모든 Chunk 내용은 원본 소스의 일부입니다.
+
+```yaml
+source:
+  chunk_size: 4000
+  chunk_overlap: 400
+```
+
+스캔 및 Chunk 메타데이터를 확인합니다. 기본 출력에는 소스 본문을 노출하지 않습니다.
+
+```powershell
+python -m app.chunkers.csharp_chunker --config config\config.yaml
+```
+
+합성 테스트 폴더 등 다른 경로를 일시적으로 확인하려면 `--source`를 사용합니다. 소스 본문 출력은 명시적으로 `--show-content`를 지정했을 때만 활성화됩니다.
 
 ## 데이터 보안
 
