@@ -32,6 +32,8 @@ class ChunkMetadata:
     class_name: str = ""
     method_name: str = ""
     chunk_index: int = 0
+    start_line: int = 0
+    end_line: int = 0
     file_hash: str = ""
     modified_time: str = ""
     language: str = "csharp"
@@ -66,6 +68,14 @@ class ChunkMetadata:
             or self.chunk_index < 0
         ):
             raise VectorStoreError("metadata.chunk_index must be a non-negative integer")
+        for field_name in ("start_line", "end_line"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise VectorStoreError(
+                    f"metadata.{field_name} must be a non-negative integer"
+                )
+        if self.start_line and self.end_line < self.start_line:
+            raise VectorStoreError("metadata.end_line must not precede start_line")
 
     def to_chroma(self) -> dict[str, str | int]:
         """Return the complete scalar metadata payload accepted by ChromaDB."""
@@ -88,6 +98,8 @@ class ChunkMetadata:
                 class_name=value["class_name"],
                 method_name=value["method_name"],
                 chunk_index=value["chunk_index"],
+                start_line=value.get("start_line", 0),
+                end_line=value.get("end_line", 0),
                 file_hash=value["file_hash"],
                 modified_time=value["modified_time"],
                 language=value["language"],

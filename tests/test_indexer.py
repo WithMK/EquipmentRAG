@@ -190,6 +190,8 @@ class IncrementalSourceIndexerTests(unittest.TestCase):
                 record.metadata.file_hash
                 and record.metadata.language == "csharp"
                 and record.metadata.source_type == "code"
+                and record.metadata.start_line > 0
+                and record.metadata.end_line >= record.metadata.start_line
                 for record in self.store.records.values()
             )
         )

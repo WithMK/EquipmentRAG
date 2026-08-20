@@ -64,6 +64,8 @@ class ChromaStoreTests(unittest.TestCase):
             class_name=file_name.removesuffix(".cs"),
             method_name="Run",
             chunk_index=chunk_index,
+            start_line=10 + chunk_index,
+            end_line=20 + chunk_index,
             file_hash=f"hash-{file_name}",
             modified_time="2026-01-01T00:00:00Z",
         )
@@ -97,6 +99,8 @@ class ChromaStoreTests(unittest.TestCase):
         self.assertEqual(results[0].id, "z-home")
         self.assertAlmostEqual(results[0].distance, 0.0, places=6)
         self.assertEqual(results[0].metadata.language, "csharp")
+        self.assertEqual(results[0].metadata.start_line, 10)
+        self.assertEqual(results[0].metadata.end_line, 20)
 
         store.upsert(
             [

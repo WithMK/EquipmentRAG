@@ -344,6 +344,8 @@ class IncrementalSourceIndexer:
                         class_name=chunk.class_name,
                         method_name=chunk.method_name,
                         chunk_index=chunk_index,
+                        start_line=chunk.start_line,
+                        end_line=chunk.end_line,
                         file_hash=source.file_hash,
                         modified_time=source.modified_time,
                     ),
@@ -466,6 +468,7 @@ def _settings_fingerprint(config: AppConfig) -> str:
         model_files.append((file_name, stat.st_size, stat.st_mtime_ns))
     payload = {
         "state_version": _STATE_VERSION,
+        "metadata_schema_version": 2,
         "source_root": str(config.source.path.resolve(strict=False)),
         "include_extensions": sorted(config.source.include_extensions),
         "exclude_directories": sorted(config.source.exclude_directories),

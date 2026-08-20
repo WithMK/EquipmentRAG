@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 5까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking과 증분 색인을 제공합니다. 검색 CLI와 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 6까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인과 Semantic Code Search CLI를 제공합니다. LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
 
 ## 요구 환경
 
@@ -81,7 +81,7 @@ python -m app.embedding.embedding_service `
 ```text
 equipment, source_type, repository, project, file_name, file_path,
 relative_path, class_name, method_name, chunk_index, file_hash,
-modified_time, language
+modified_time, language, start_line, end_line
 ```
 
 합성 C# 테스트 Chunk 두 개를 저장하고 LLM 없이 검색하려면 다음 명령을 실행합니다.
@@ -144,6 +144,41 @@ python -m app.indexer `
 ```
 
 CLI 보고서에는 전체 파일 수, 신규·변경·삭제·Skip·재색인 파일, 준비·저장·삭제된 Chunk 수가 포함됩니다.
+
+## Phase 6: Semantic Code Search CLI
+
+자연어 질의를 로컬 임베딩 모델로 벡터화하고 ChromaDB에서 가장 가까운 C# Chunk를 검색합니다. 이 단계에서는 LLM 서버가 필요하지 않습니다. 기본 검색 개수는 `config/config.yaml`의 `search.top_k`를 사용합니다.
+
+먼저 Phase 5 인덱서로 소스를 색인한 뒤 검색합니다.
+
+```powershell
+python -m app.search "Press Z축 Home 실패 관련 코드" `
+  --config config\config.yaml
+```
+
+기본 출력에는 순위, Score, Cosine Distance, 파일, 클래스, 메서드, 원본 라인 범위, 경로와 코드가 포함됩니다. Score는 `1 - cosine distance`로 계산되므로 값이 클수록 질의에 더 가깝습니다.
+
+검색 개수와 메타데이터 필터를 지정할 수 있습니다.
+
+```powershell
+python -m app.search "원점 복귀 실패" `
+  --config config\config.yaml `
+  --top-k 5 `
+  --class-name AxisController `
+  --method-name HomeZAxis
+```
+
+`--equipment`, `--repository`, `--relative-path`, `--class-name`, `--method-name`은 ChromaDB의 정확 일치 필터입니다. 기본적으로 현재 설정의 설비명으로 검색 범위를 제한해 다른 설비의 Chunk가 섞이지 않게 합니다.
+
+자동화용 JSON 출력이나 코드 본문 제외도 지원합니다. 별도 테스트 DB를 검색할 때는 `--chroma-path`로 경로를 덮어쓸 수 있습니다.
+
+```powershell
+python -m app.search "Safety 정지 로직" `
+  --config config\config.yaml `
+  --chroma-path .\synthetic-chroma `
+  --json `
+  --no-code
+```
 
 ## 데이터 보안
 
