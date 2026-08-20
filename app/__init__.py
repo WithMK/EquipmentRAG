@@ -1,0 +1,1 @@
+"""EquipmentRAG application package."""

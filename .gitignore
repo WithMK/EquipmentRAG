@@ -1,0 +1,41 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Local models, offline packages, source material, and indexes
+models/
+wheels/
+data/source/
+data/chroma/
+*.gguf
+
+# Runtime output
+logs/
+*.log
+
+# Editors and operating system files
+.vscode/
+.idea/
+.vs/
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/

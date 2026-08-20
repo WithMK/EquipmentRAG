@@ -1,0 +1,36 @@
+equipment:
+  name: sample-equipment
+
+source:
+  path: ./data/source
+  include_extensions:
+    - .cs
+  exclude_directories:
+    - bin
+    - obj
+    - .git
+    - .vs
+    - Debug
+    - Release
+    - packages
+
+embedding:
+  model_path: ./models/bge-m3
+  batch_size: 16
+
+chromadb:
+  path: ./data/chroma
+  collection_name: equipment_code
+
+search:
+  top_k: 5
+
+llm:
+  provider: llama_cpp
+  base_url: http://127.0.0.1:8080/v1
+  model: local-model
+  request_timeout_seconds: 120
+
+logging:
+  level: INFO
+  path: ./logs/equipment_rag.log

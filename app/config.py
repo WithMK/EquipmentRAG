@@ -1,0 +1,215 @@
+"""Typed configuration loading for EquipmentRAG."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import yaml
+
+
+class ConfigError(ValueError):
+    """Raised when the YAML configuration is missing or invalid."""
+
+
+@dataclass(frozen=True)
+class EquipmentConfig:
+    name: str
+
+
+@dataclass(frozen=True)
+class SourceConfig:
+    path: Path
+    include_extensions: tuple[str, ...]
+    exclude_directories: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    model_path: Path
+    batch_size: int
+
+
+@dataclass(frozen=True)
+class ChromaConfig:
+    path: Path
+    collection_name: str
+
+
+@dataclass(frozen=True)
+class SearchConfig:
+    top_k: int
+
+
+@dataclass(frozen=True)
+class LlmConfig:
+    provider: str
+    base_url: str
+    model: str
+    request_timeout_seconds: int
+
+
+@dataclass(frozen=True)
+class LoggingConfig:
+    level: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    project_root: Path
+    equipment: EquipmentConfig
+    source: SourceConfig
+    embedding: EmbeddingConfig
+    chromadb: ChromaConfig
+    search: SearchConfig
+    llm: LlmConfig
+    logging: LoggingConfig
+
+    def safe_summary(self) -> dict[str, Any]:
+        """Return a JSON-compatible summary without credential fields."""
+
+        summary = asdict(self)
+        return _paths_to_strings(summary)
+
+
+def _paths_to_strings(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: _paths_to_strings(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_paths_to_strings(item) for item in value]
+    return value
+
+
+def _section(data: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    value = data.get(name)
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"Missing or invalid '{name}' section")
+    return value
+
+
+def _required_string(data: Mapping[str, Any], key: str, section_name: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"'{section_name}.{key}' must be a non-empty string")
+    return value.strip()
+
+
+def _positive_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"'{section_name}.{key}' must be a positive integer")
+    return value
+
+
+def _string_tuple(data: Mapping[str, Any], key: str, section_name: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise ConfigError(f"'{section_name}.{key}' must be a list of strings")
+    items = tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+    if len(items) != len(value) or not items:
+        raise ConfigError(f"'{section_name}.{key}' must contain non-empty strings")
+    return items
+
+
+def _resolve_path(raw_path: str, project_root: Path) -> Path:
+    expanded = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+    if not expanded.is_absolute():
+        expanded = project_root / expanded
+    return expanded.resolve(strict=False)
+
+
+def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
+    """Load and validate a YAML configuration file.
+
+    Relative values in the YAML file are resolved from the project root, which
+    is assumed to be the parent directory of the configuration directory.
+    """
+
+    path = Path(config_path).expanduser().resolve(strict=False)
+    if not path.is_file():
+        raise ConfigError(f"Configuration file not found: {path}")
+
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        raise ConfigError(f"Unable to read configuration: {path}") from exc
+
+    if not isinstance(parsed, Mapping):
+        raise ConfigError("Configuration root must be a mapping")
+
+    project_root = path.parent.parent.resolve(strict=False)
+    equipment = _section(parsed, "equipment")
+    source = _section(parsed, "source")
+    embedding = _section(parsed, "embedding")
+    chromadb = _section(parsed, "chromadb")
+    search = _section(parsed, "search")
+    llm = _section(parsed, "llm")
+    logging_config = _section(parsed, "logging")
+
+    provider = _required_string(llm, "provider", "llm").lower()
+    if provider not in {"llama_cpp", "ollama"}:
+        raise ConfigError("'llm.provider' must be 'llama_cpp' or 'ollama'")
+
+    level = _required_string(logging_config, "level", "logging").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ConfigError("'logging.level' is invalid")
+
+    return AppConfig(
+        project_root=project_root,
+        equipment=EquipmentConfig(name=_required_string(equipment, "name", "equipment")),
+        source=SourceConfig(
+            path=_resolve_path(_required_string(source, "path", "source"), project_root),
+            include_extensions=_string_tuple(source, "include_extensions", "source"),
+            exclude_directories=_string_tuple(source, "exclude_directories", "source"),
+        ),
+        embedding=EmbeddingConfig(
+            model_path=_resolve_path(
+                _required_string(embedding, "model_path", "embedding"), project_root
+            ),
+            batch_size=_positive_int(embedding, "batch_size", "embedding"),
+        ),
+        chromadb=ChromaConfig(
+            path=_resolve_path(_required_string(chromadb, "path", "chromadb"), project_root),
+            collection_name=_required_string(chromadb, "collection_name", "chromadb"),
+        ),
+        search=SearchConfig(top_k=_positive_int(search, "top_k", "search")),
+        llm=LlmConfig(
+            provider=provider,
+            base_url=_required_string(llm, "base_url", "llm").rstrip("/"),
+            model=_required_string(llm, "model", "llm"),
+            request_timeout_seconds=_positive_int(
+                llm, "request_timeout_seconds", "llm"
+            ),
+        ),
+        logging=LoggingConfig(
+            level=level,
+            path=_resolve_path(
+                _required_string(logging_config, "path", "logging"), project_root
+            ),
+        ),
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Validate EquipmentRAG configuration")
+    parser.add_argument("--config", default="config/config.yaml", help="YAML configuration path")
+    args = parser.parse_args()
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        parser.error(str(exc))
+
+    print(json.dumps(config.safe_summary(), ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

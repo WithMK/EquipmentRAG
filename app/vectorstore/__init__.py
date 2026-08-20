@@ -1,0 +1,1 @@
+"""Persistent vector store adapters."""
