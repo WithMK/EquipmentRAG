@@ -271,17 +271,45 @@ class PersistentChromaStore:
             raise VectorStoreError("Unable to delete ChromaDB records") from exc
         return len(existing)
 
-    def delete_by_file_path(self, file_path: str) -> int:
+    def delete_by_file_path(
+        self, file_path: str, *, equipment: str | None = None
+    ) -> int:
         if not isinstance(file_path, str) or not file_path.strip():
             raise VectorStoreError("file_path must be a non-empty string")
+        if equipment is not None and (
+            not isinstance(equipment, str) or not equipment.strip()
+        ):
+            raise VectorStoreError("equipment must be a non-empty string")
         collection = self._get_collection()
-        where = {"file_path": file_path}
+        where: dict[str, Any]
+        if equipment is None:
+            where = {"file_path": file_path}
+        else:
+            where = {
+                "$and": [
+                    {"file_path": file_path},
+                    {"equipment": equipment},
+                ]
+            }
         try:
             existing = collection.get(where=where, include=[])["ids"]
             if existing:
                 collection.delete(where=where)
         except Exception as exc:
             raise VectorStoreError("Unable to delete records for file_path") from exc
+        return len(existing)
+
+    def delete_by_equipment(self, equipment: str) -> int:
+        if not isinstance(equipment, str) or not equipment.strip():
+            raise VectorStoreError("equipment must be a non-empty string")
+        collection = self._get_collection()
+        where = {"equipment": equipment}
+        try:
+            existing = collection.get(where=where, include=[])["ids"]
+            if existing:
+                collection.delete(where=where)
+        except Exception as exc:
+            raise VectorStoreError("Unable to delete records for equipment") from exc
         return len(existing)
 
     def _get_collection(self) -> Any:

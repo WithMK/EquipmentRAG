@@ -147,6 +147,34 @@ class ChromaStoreTests(unittest.TestCase):
         self.assertEqual(store.count(), 0)
         self.assertEqual(store.search([1.0, 0.0, 0.0], 3), [])
 
+    def test_scopes_file_deletion_by_equipment(self) -> None:
+        store = self._store()
+        shared_path = "C:/synthetic/Shared.cs"
+        first_metadata = self._metadata("Shared.cs")
+        second_metadata = ChunkMetadata(
+            **{
+                **first_metadata.to_chroma(),
+                "equipment": "other-equipment",
+            }
+        )
+        store.upsert(
+            [
+                VectorRecord("first", "first", [1.0, 0.0, 0.0], first_metadata),
+                VectorRecord("second", "second", [0.0, 1.0, 0.0], second_metadata),
+            ]
+        )
+
+        self.assertEqual(
+            store.delete_by_file_path(
+                shared_path,
+                equipment="test-equipment",
+            ),
+            1,
+        )
+        self.assertEqual(store.count(), 1)
+        self.assertEqual(store.delete_by_equipment("other-equipment"), 1)
+        self.assertEqual(store.count(), 0)
+
     def test_rejects_invalid_dimensions_duplicates_and_collection_reuse(self) -> None:
         store = self._store()
         with self.assertRaisesRegex(VectorStoreError, "dimension mismatch"):

@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 4까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 소스 탐색 및 구조 기반 Chunking을 제공합니다. 증분 색인과 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 5까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking과 증분 색인을 제공합니다. 검색 CLI와 LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
 
 ## 요구 환경
 
@@ -114,6 +114,36 @@ python -m app.chunkers.csharp_chunker --config config\config.yaml
 ```
 
 합성 테스트 폴더 등 다른 경로를 일시적으로 확인하려면 `--source`를 사용합니다. 소스 본문 출력은 명시적으로 `--show-content`를 지정했을 때만 활성화됩니다.
+
+## Phase 5: 증분 소스 인덱서
+
+인덱서는 파일 SHA-256을 이전 상태와 비교해 신규 파일만 추가하고, 변경 파일의 기존 Chunk는 삭제 후 다시 저장합니다. 사라진 파일은 ChromaDB에서도 제거하며 변경이 없는 파일은 Embedding 모델을 로드하지 않고 건너뜁니다.
+
+색인 상태에는 소스 본문을 저장하지 않습니다. 파일 Hash, 로컬 경로, Chunk ID와 설정 fingerprint만 ChromaDB 경로 아래의 `index-state-*.json`에 원자적으로 기록합니다. Chunk 크기, 모델 파일 또는 주요 설정이 바뀌면 자동으로 전체 재색인합니다.
+
+변경 예정 항목만 확인합니다. Dry-run은 모델, ChromaDB와 상태 파일을 변경하지 않습니다.
+
+```powershell
+python -m app.indexer --config config\config.yaml --dry-run
+```
+
+증분 색인을 실행하거나 전체 재색인을 강제합니다.
+
+```powershell
+python -m app.indexer --config config\config.yaml
+python -m app.indexer --config config\config.yaml --full
+```
+
+합성 테스트 폴더와 별도 DB를 사용할 때는 실제 설정을 수정하지 않고 경로를 덮어쓸 수 있습니다.
+
+```powershell
+python -m app.indexer `
+  --config config\config.yaml `
+  --source .\synthetic-source `
+  --chroma-path .\synthetic-chroma
+```
+
+CLI 보고서에는 전체 파일 수, 신규·변경·삭제·Skip·재색인 파일, 준비·저장·삭제된 Chunk 수가 포함됩니다.
 
 ## 데이터 보안
 
