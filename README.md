@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 6까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인과 Semantic Code Search CLI를 제공합니다. LLM 연동은 이후 Phase에서 순차적으로 구현합니다.
+Phase 7까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인, Semantic Code Search CLI와 llama.cpp API 클라이언트를 제공합니다. 검색 결과를 LLM Context로 연결하는 RAG 질의는 Phase 8에서 구현합니다.
 
 ## 요구 환경
 
@@ -179,6 +179,46 @@ python -m app.search "Safety 정지 로직" `
   --json `
   --no-code
 ```
+
+## Phase 7: llama.cpp API 클라이언트
+
+`LlamaCppClient`는 로컬 llama.cpp의 OpenAI 호환 `POST /v1/chat/completions` API를 호출합니다. OpenAI 클라우드나 외부 SDK를 사용하지 않으며 Python 표준 라이브러리만으로 통신합니다. 요청 URL, 모델명과 Timeout은 `config/config.yaml`의 `llm` 설정을 사용합니다.
+
+```yaml
+llm:
+  provider: llama_cpp
+  base_url: http://127.0.0.1:8080/v1
+  model: local-model
+  request_timeout_seconds: 120
+```
+
+먼저 로컬 GGUF 모델로 `llama-server`를 실행합니다. 실행 파일과 모델 경로는 설치 위치에 맞게 지정합니다.
+
+```powershell
+llama-server.exe `
+  --model D:\LocalAI\models\equipment-model.gguf `
+  --host 127.0.0.1 `
+  --port 8080
+```
+
+서버가 준비되면 단독 CLI로 연결과 응답을 확인합니다.
+
+```powershell
+python -m app.llm.llama_client "C# 설비 제어 코드 분석 준비 상태를 알려줘." `
+  --config config\config.yaml `
+  --system "간결하고 정확하게 답하세요." `
+  --temperature 0.1 `
+  --max-tokens 256
+```
+
+기본 출력은 응답 본문이며 `--json`을 지정하면 모델명, 종료 사유와 서버가 제공한 Token 사용량도 출력합니다. 인증이 활성화된 로컬 서버에서만 `LLAMA_CPP_API_KEY` 환경변수를 사용하며, 해당 값은 출력하거나 저장소에 기록하지 않습니다.
+
+```powershell
+$env:LLAMA_CPP_API_KEY = "<local-server-key>"
+python -m app.llm.llama_client "연결 확인" --json
+```
+
+`app.llm.base`의 공통 메시지·응답 인터페이스는 Phase 8 RAG 파이프라인과 Phase 9 Ollama Provider가 동일한 계약을 사용하도록 분리되어 있습니다.
 
 ## 데이터 보안
 
