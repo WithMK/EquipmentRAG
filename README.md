@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 8까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인, Semantic Code Search, llama.cpp API와 전체 RAG 질의 파이프라인을 제공합니다. Ollama Provider는 Phase 9에서 추가합니다.
+Phase 9까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인, Semantic Code Search, 전체 RAG 질의와 llama.cpp/Ollama Provider 전환을 제공합니다. 폐쇄망 배포 문서는 Phase 10에서 완성합니다.
 
 ## 요구 환경
 
@@ -262,6 +262,44 @@ python -m app.rag_service "Safety 정지 조건은?" `
 ```
 
 검색 결과가 없으면 LLM을 호출하지 않고 근거가 없다는 안전한 응답을 반환합니다. `app.llm.factory`가 Provider 생성을 담당하므로 Phase 9에서 Ollama를 추가해도 RAG 처리 순서는 변경되지 않습니다.
+
+## Phase 9: Ollama Provider
+
+Ollama의 로컬 Native API `POST /api/chat`을 지원합니다. 비스트리밍 JSON 응답을 위해 `stream: false`를 사용하고, 내부 추론이 답변 Token을 소모하거나 노출되지 않도록 `think: false`를 명시합니다. `max_tokens`는 Ollama의 `options.num_predict`로 변환됩니다.
+
+현재 로컬에 설치된 모델은 다음 명령으로 확인합니다.
+
+```powershell
+ollama list
+```
+
+`config/config.yaml`의 `llm` 설정을 Ollama로 변경합니다. 폐쇄망에서는 미리 반입한 로컬 모델명을 사용하고 `-cloud` 모델은 지정하지 않습니다.
+
+```yaml
+llm:
+  provider: ollama
+  base_url: http://127.0.0.1:11434/api
+  model: your-local-model:latest
+  request_timeout_seconds: 120
+```
+
+Ollama 단독 연결을 확인합니다. 로컬 API는 기본적으로 인증정보가 필요하지 않습니다.
+
+```powershell
+python -m app.llm.ollama_client "로컬 Ollama 연결 상태를 알려줘." `
+  --config config\config.yaml `
+  --max-tokens 128 `
+  --json
+```
+
+RAG 명령은 llama.cpp와 동일합니다. Provider 선택은 `app.llm.factory`가 처리하므로 `rag_service.py`를 수정할 필요가 없습니다.
+
+```powershell
+python -m app.rag_service "Z축 원점 복귀 코드를 설명해줘." `
+  --config config\config.yaml `
+  --top-k 3 `
+  --max-tokens 512
+```
 
 ## 데이터 보안
 

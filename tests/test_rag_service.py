@@ -19,6 +19,7 @@ from app.config import (
 from app.llm.base import ChatMessage, LlmError, LlmResponse, LlmUsage
 from app.llm.factory import create_llm_client
 from app.llm.llama_client import LlamaCppClient
+from app.llm.ollama_client import OllamaClient
 from app.rag_service import (
     NO_CONTEXT_ANSWER,
     SYSTEM_PROMPT,
@@ -240,11 +241,11 @@ class RagServiceTests(unittest.TestCase):
         self.assertIn("Code:\npublic void HomeZAxis", output_with_code)
 
     def test_factory_keeps_provider_selection_outside_rag_logic(self) -> None:
-        client = create_llm_client(_config(self.root).llm)
+        llama_client = create_llm_client(_config(self.root).llm)
+        ollama_client = create_llm_client(_config(self.root, provider="ollama").llm)
 
-        self.assertIsInstance(client, LlamaCppClient)
-        with self.assertRaisesRegex(LlmError, "not implemented"):
-            create_llm_client(_config(self.root, provider="ollama").llm)
+        self.assertIsInstance(llama_client, LlamaCppClient)
+        self.assertIsInstance(ollama_client, OllamaClient)
 
 
 if __name__ == "__main__":
