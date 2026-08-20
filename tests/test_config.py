@@ -38,6 +38,22 @@ logging:
 
 
 class ConfigTests(unittest.TestCase):
+    def test_offline_example_remains_a_valid_configuration(self) -> None:
+        example = (
+            Path(__file__).resolve().parents[1]
+            / "config"
+            / "config.offline.example.yaml"
+        )
+
+        config = load_config(example)
+
+        self.assertEqual(config.equipment.name, "replace-with-equipment-name")
+        self.assertEqual(config.llm.provider, "llama_cpp")
+        self.assertEqual(
+            config.embedding.model_path,
+            Path("D:/OfflineAssets/models/embedding/bge-m3"),
+        )
+
     def test_loads_and_resolves_relative_paths_from_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

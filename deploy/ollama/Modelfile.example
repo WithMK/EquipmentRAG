@@ -1,0 +1,5 @@
+# Place this file beside the approved GGUF and rename it to Modelfile.
+FROM ./model.gguf
+
+PARAMETER temperature 0.1
+PARAMETER num_ctx 8192

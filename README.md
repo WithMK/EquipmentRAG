@@ -4,7 +4,7 @@ Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM
 
 ## 현재 범위
 
-Phase 9까지 프로젝트 구조, YAML 설정 로더, 로컬 임베딩, 영구 ChromaDB, C# 구조 기반 Chunking, 증분 색인, Semantic Code Search, 전체 RAG 질의와 llama.cpp/Ollama Provider 전환을 제공합니다. 폐쇄망 배포 문서는 Phase 10에서 완성합니다.
+Phase 10까지 로컬 RAG PoC 전 과정을 제공합니다. C# 증분 색인, Semantic Search, 근거 기반 RAG, llama.cpp/Ollama 전환과 Windows 폐쇄망 반입·설치·Gitea 이전 절차가 포함됩니다.
 
 ## 요구 환경
 
@@ -300,6 +300,18 @@ python -m app.rag_service "Z축 원점 복귀 코드를 설명해줘." `
   --top-k 3 `
   --max-tokens 512
 ```
+
+## Phase 10: 폐쇄망 배포
+
+외부 GitHub 개발본을 Git bundle로 반입하고, Windows용 wheel과 로컬 모델을 SHA-256으로 검증한 뒤 사내 Gitea와 운영 경로에 배치하는 전체 절차는 [`docs/OFFLINE_DEPLOYMENT.md`](docs/OFFLINE_DEPLOYMENT.md)를 따릅니다.
+
+폐쇄망 전용 설정은 추적되는 기본 파일을 수정하지 않고 예제에서 복사합니다.
+
+```powershell
+Copy-Item .\config\config.offline.example.yaml .\config\config.local.yaml
+```
+
+`config/config.local.yaml`은 Git에서 제외됩니다. Ollama GGUF 반입은 [`deploy/ollama/Modelfile.example`](deploy/ollama/Modelfile.example)을 사용할 수 있습니다. 실제 Source, 모델, wheel, DB와 운영 로그는 Repository 밖에서 관리합니다.
 
 ## 데이터 보안
 
