@@ -96,10 +96,12 @@ Get-ChildItem ..\offline-bundle\wheels -File |
 
 아무것도 출력되지 않아야 합니다. wheel 디렉터리는 매 Release마다 새로 만들고 이전 Version과 섞지 않습니다.
 
-Document RAG를 포함하는 Release에는 `python-docx`, `lxml`과 `pypdf`의 Windows
-wheel도 포함되어야 합니다. `requirements-offline.txt`로 수집하면 함께 해결되며,
-반입 대상 Python Minor Version과 Architecture가 동일한지 확인합니다. OCR Runtime은
-이번 Phase에 포함되지 않습니다.
+Document RAG를 포함하는 Release에는 `python-docx`, `lxml`, `pypdf`,
+`python-pptx`와 `openpyxl`의 Windows wheel도 포함되어야 합니다.
+`python-pptx`의 `Pillow`, `XlsxWriter`와 `openpyxl`의 `et-xmlfile` 같은 전이
+의존성도 wheel 디렉터리에 있어야 합니다. `requirements-offline.txt`로 수집하면
+함께 해결되며, 반입 대상 Python Minor Version과 Architecture가 동일한지
+확인합니다. OCR Runtime은 이번 Phase에 포함되지 않습니다.
 
 ## 5. 모델과 Runtime 준비
 
