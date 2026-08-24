@@ -30,6 +30,14 @@ class _Region:
     rows: tuple[tuple[str, ...], ...]
 
 
+@dataclass
+class _PendingRegion:
+    row_start: int
+    row_end: int
+    columns: set[int]
+    rows: list[dict[int, str]]
+
+
 class XlsxDocumentParser:
     def parse(self, source: DocumentSourceFile) -> NormalizedDocument:
         try:
@@ -143,35 +151,33 @@ def _sheet_regions(
         if values:
             populated.append((row_index, values))
 
-    grouped: list[tuple[int, int, set[int], list[dict[int, str]]]] = []
+    grouped: list[_PendingRegion] = []
     for row_index, values in populated:
         columns = set(values)
-        if grouped and row_index == grouped[-1][1] + 1:
-            start, _, existing_columns, rows = grouped[-1]
-            grouped[-1] = (
-                start,
-                row_index,
-                existing_columns | columns,
-                [*rows, values],
-            )
+        if grouped and row_index == grouped[-1].row_end + 1:
+            grouped[-1].row_end = row_index
+            grouped[-1].columns.update(columns)
+            grouped[-1].rows.append(values)
         else:
-            grouped.append((row_index, row_index, columns, [values]))
+            grouped.append(
+                _PendingRegion(row_index, row_index, columns, [values])
+            )
 
     regions: list[_Region] = []
-    for row_start, row_end, columns, values_by_row in grouped:
-        column_start = min(columns)
-        column_end = max(columns)
+    for pending in grouped:
+        column_start = min(pending.columns)
+        column_end = max(pending.columns)
         rows = tuple(
             tuple(
                 values.get(column_index, "")
                 for column_index in range(column_start, column_end + 1)
             )
-            for values in values_by_row
+            for values in pending.rows
         )
         regions.append(
             _Region(
-                row_start,
-                row_end,
+                pending.row_start,
+                pending.row_end,
                 column_start,
                 column_end,
                 rows,
