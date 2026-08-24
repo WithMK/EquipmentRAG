@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -122,9 +123,11 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
             ),
         )
 
-    def _indexer(self) -> IncrementalDocumentIndexer:
+    def _indexer(
+        self, config: AppConfig | None = None
+    ) -> IncrementalDocumentIndexer:
         return IncrementalDocumentIndexer(
-            self.config,
+            config or self.config,
             embedding=self.embedding,
             vector_store=self.store,
             state_path=self.state_path,
@@ -172,13 +175,28 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
             encoding="utf-8",
         )
         trouble.unlink()
+        (self.documents / "Review.md").write_text(
+            "# Design Review\n\nVacuum input review action",
+            encoding="utf-8",
+        )
         incremental = self._indexer().run()
 
+        self.assertEqual(incremental.new_files, ("Review.md",))
         self.assertEqual(incremental.changed_files, ("Loader.md",))
         self.assertEqual(incremental.deleted_files, ("Trouble.txt",))
         self.assertEqual(
-            {record.metadata.revision for record in self.store.records.values()},
+            {
+                record.metadata.revision
+                for record in self.store.records.values()
+                if record.metadata.document_id == "loader-spec"
+            },
             {"Rev.4"},
+        )
+        self.assertTrue(
+            any(
+                record.metadata.file_name == "Review.md"
+                for record in self.store.records.values()
+            )
         )
         self.assertNotIn("Vacuum timeout", [r.document for r in self.store.records.values()])
 
@@ -210,6 +228,34 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
 
         self.assertEqual(self.state_path.read_bytes(), state_before)
         self.assertEqual(self.store.records, records_before)
+
+    def test_full_and_settings_change_reindex_all_current_documents(self) -> None:
+        (self.documents / "Manual.md").write_text(
+            "# Manual\n\nLoader operation",
+            encoding="utf-8",
+        )
+        (self.documents / "Alarm.txt").write_text(
+            "ALARM:\nVacuum timeout",
+            encoding="utf-8",
+        )
+        self._indexer().run()
+
+        full = self._indexer().run(full_reindex=True)
+
+        self.assertTrue(full.full_reindex)
+        self.assertEqual(full.reindex_reason, "requested_full_reindex")
+        self.assertEqual(full.reindexed_files, ("Alarm.txt", "Manual.md"))
+
+        assert self.config.document is not None
+        changed_config = replace(
+            self.config,
+            document=replace(self.config.document, chunk_size=250),
+        )
+        settings = self._indexer(changed_config).run(dry_run=True)
+
+        self.assertTrue(settings.full_reindex)
+        self.assertEqual(settings.reindex_reason, "index_settings_changed")
+        self.assertEqual(settings.reindexed_files, ("Alarm.txt", "Manual.md"))
 
 
 if __name__ == "__main__":
