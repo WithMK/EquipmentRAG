@@ -20,12 +20,18 @@ from app.llm.base import ChatMessage, LlmError, LlmResponse, LlmUsage
 from app.llm.factory import create_llm_client
 from app.llm.llama_client import LlamaCppClient
 from app.llm.ollama_client import OllamaClient
+from app.models.document_models import DocumentChunkMetadata
 from app.rag_service import (
+    DOCUMENT_SYSTEM_PROMPT,
     NO_CONTEXT_ANSWER,
     SYSTEM_PROMPT,
     RagError,
     RagService,
     format_rag_answer,
+)
+from app.retrieval.document_retriever import (
+    DocumentSearchFilters,
+    DocumentSearchResult,
 )
 from app.search import CodeSearchFilters, CodeSearchResult, SearchError
 
@@ -126,6 +132,24 @@ class FakeLlm:
             finish_reason="stop",
             usage=LlmUsage(100, 20, 120),
         )
+
+
+class FakeDocumentSearch:
+    def __init__(self, results: list[DocumentSearchResult]) -> None:
+        self.results = results
+        self.calls: list[
+            tuple[str, int | None, DocumentSearchFilters | None]
+        ] = []
+
+    def search(
+        self,
+        query: str,
+        *,
+        top_k: int | None = None,
+        filters: DocumentSearchFilters | None = None,
+    ) -> list[DocumentSearchResult]:
+        self.calls.append((query, top_k, filters))
+        return self.results
 
 
 class RagServiceTests(unittest.TestCase):
@@ -246,6 +270,59 @@ class RagServiceTests(unittest.TestCase):
 
         self.assertIsInstance(llama_client, LlamaCppClient)
         self.assertIsInstance(ollama_client, OllamaClient)
+
+    def test_document_mode_builds_traceable_document_context(self) -> None:
+        metadata = DocumentChunkMetadata(
+            document_id="loader-spec",
+            source_path="Specs/Loader.docx",
+            file_name="Loader.docx",
+            file_extension=".docx",
+            equipment="press-line-01",
+            chunk_index=0,
+            document_type="Specification",
+            revision="Rev.3",
+            section="Auto Sequence",
+            subsection="Loader Interlock",
+            page=17,
+            file_hash="file-hash",
+            content_hash="content-hash",
+            indexed_at="2026-08-24T00:00:00Z",
+        )
+        result = DocumentSearchResult(
+            rank=1,
+            chunk_id="doc-1",
+            score=0.91,
+            distance=0.09,
+            text="Vacuum sensor must be ON before pickup.",
+            metadata=metadata,
+        )
+        search = FakeDocumentSearch([result])
+        filters = DocumentSearchFilters(
+            equipment="press-line-01",
+            unit="Loader",
+        )
+        service = RagService(
+            _config(self.root),
+            search=search,
+            llm_client=self.llm,
+            source_type="document",
+        )
+
+        answer = service.ask("Loader interlock?", filters=filters)
+
+        self.assertEqual(search.calls, [("Loader interlock?", None, filters)])
+        messages, _, _ = self.llm.calls[-1]
+        self.assertEqual(messages[0], ChatMessage("system", DOCUMENT_SYSTEM_PROMPT))
+        self.assertIn("Revision: Rev.3", messages[1].content)
+        self.assertIn("Page: 17", messages[1].content)
+        self.assertIn("Text:\nVacuum sensor", messages[1].content)
+        self.assertEqual(answer.sources[0].source_type, "document")
+        source_payload = answer.to_dict(include_source_code=True)["sources"][0]
+        self.assertIn("text", source_payload)
+        self.assertNotIn("code", source_payload)
+        output = format_rag_answer(answer, include_source_code=True)
+        self.assertIn("Section: Loader Interlock", output)
+        self.assertIn("Text:\nVacuum sensor", output)
 
 
 if __name__ == "__main__":
