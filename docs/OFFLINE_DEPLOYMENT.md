@@ -96,6 +96,11 @@ Get-ChildItem ..\offline-bundle\wheels -File |
 
 아무것도 출력되지 않아야 합니다. wheel 디렉터리는 매 Release마다 새로 만들고 이전 Version과 섞지 않습니다.
 
+Document RAG를 포함하는 Release에는 `python-docx`, `lxml`과 `pypdf`의 Windows
+wheel도 포함되어야 합니다. `requirements-offline.txt`로 수집하면 함께 해결되며,
+반입 대상 Python Minor Version과 Architecture가 동일한지 확인합니다. OCR Runtime은
+이번 Phase에 포함되지 않습니다.
+
 ## 5. 모델과 Runtime 준비
 
 ### 5.1 Embedding 모델
@@ -284,6 +289,15 @@ python -m app.embedding.embedding_service `
 python -m app.indexer --config .\config\config.local.yaml --dry-run
 ```
 
+Document RAG를 사용할 경우 실제 문서를 폐쇄망 경로에 배치하고 `document.enabled`를
+`true`로 변경한 뒤 문서 Dry-run도 먼저 실행합니다.
+
+```powershell
+python -m app.document_indexer `
+  --config .\config\config.local.yaml `
+  --dry-run
+```
+
 검토 후 색인, 검색과 RAG를 순서대로 실행합니다.
 
 ```powershell
@@ -294,6 +308,18 @@ python -m app.rag_service "Z축 원점 복귀 실패 원인을 설명해줘." `
   --config .\config\config.local.yaml `
   --top-k 5 `
   --max-tokens 512
+```
+
+문서 색인과 Retrieval은 다음 순서로 확인합니다.
+
+```powershell
+python -m app.document_indexer --config .\config\config.local.yaml
+python -m app.document_search "Loader Vacuum 관련 사양" `
+  --config .\config\config.local.yaml `
+  --unit Loader
+python -m app.rag_service "Loader Interlock 조건을 설명해줘." `
+  --source-type document `
+  --config .\config\config.local.yaml
 ```
 
 합격 기준:

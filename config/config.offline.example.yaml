@@ -16,6 +16,23 @@ source:
   chunk_size: 4000
   chunk_overlap: 400
 
+document:
+  enabled: false
+  source_paths:
+    - D:/EquipmentData/documents
+  extensions:
+    - .docx
+    - .pdf
+    - .md
+    - .txt
+  exclude_directories:
+    - .git
+    - .vs
+    - archive
+  chunk_size: 3000
+  chunk_overlap: 300
+  collection_name: document_chunks
+
 embedding:
   model_path: D:/OfflineAssets/models/embedding/bge-m3
   batch_size: 16

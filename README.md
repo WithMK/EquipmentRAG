@@ -322,3 +322,29 @@ Copy-Item .\config\config.offline.example.yaml .\config\config.local.yaml
 - 로컬 모델 및 GGUF: `models/`, `*.gguf`
 - 오프라인 wheel: `wheels/`
 - 로그와 비밀 설정: `logs/`, `*.log`, `.env*`
+
+## Phase 11: Document RAG
+
+기존 C# Code RAG를 유지하면서 DOCX, Text PDF, Markdown과 TXT를 위한 별도
+Document RAG를 추가했습니다. Parser는 먼저 공통 `NormalizedDocument`를 만들고,
+전용 Chunker가 Title과 Heading Path를 보존한 뒤 기존 BGE-M3와 ChromaDB를
+재사용합니다. 문서는 `document_chunks` Collection에 저장되어 Code Chunk와
+섞이지 않습니다.
+
+```powershell
+python -m app.document_indexer --config config\config.local.yaml --dry-run
+python -m app.document_indexer --config config\config.local.yaml
+
+python -m app.document_search "Loader Vacuum 관련 사양" `
+  --config config\config.local.yaml `
+  --unit Loader `
+  --document-type Specification
+```
+
+LLM 없이 Python Library로 `DocumentRetriever.retrieve(...)`를 직접 호출할 수
+있으며, 결과는 File, Revision, Section, Page와 Source Path를 포함합니다. 로컬
+LLM 답변 검증은 기존 `RagService`에 `--source-type document`를 지정합니다.
+
+Revision sidecar, Metadata Filter, CLI와 Context Orchestrator 연동 방법은
+[`docs/DOCUMENT_RAG.md`](docs/DOCUMENT_RAG.md)를 참고합니다. 실제 문서는
+`data/documents/`를 포함해 Git에서 제외된 사내 경로에만 둡니다.
