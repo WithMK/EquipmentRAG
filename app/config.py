@@ -31,6 +31,17 @@ class SourceConfig:
 
 
 @dataclass(frozen=True)
+class DocumentConfig:
+    enabled: bool
+    source_paths: tuple[Path, ...]
+    extensions: tuple[str, ...]
+    exclude_directories: tuple[str, ...]
+    chunk_size: int
+    chunk_overlap: int
+    collection_name: str
+
+
+@dataclass(frozen=True)
 class EmbeddingConfig:
     model_path: Path
     batch_size: int
@@ -73,6 +84,7 @@ class AppConfig:
     search: SearchConfig
     llm: LlmConfig
     logging: LoggingConfig
+    document: DocumentConfig | None = None
 
     def safe_summary(self) -> dict[str, Any]:
         """Return a JSON-compatible summary without credential fields."""
@@ -147,6 +159,16 @@ def _string_tuple(data: Mapping[str, Any], key: str, section_name: str) -> tuple
     return items
 
 
+def _path_tuple(
+    data: Mapping[str, Any],
+    key: str,
+    section_name: str,
+    project_root: Path,
+) -> tuple[Path, ...]:
+    values = _string_tuple(data, key, section_name)
+    return tuple(_resolve_path(value, project_root) for value in values)
+
+
 def _resolve_path(raw_path: str, project_root: Path) -> Path:
     expanded = Path(os.path.expandvars(os.path.expanduser(raw_path)))
     if not expanded.is_absolute():
@@ -181,11 +203,53 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     search = _section(parsed, "search")
     llm = _section(parsed, "llm")
     logging_config = _section(parsed, "logging")
+    document_data = parsed.get("document")
+    if document_data is not None and not isinstance(document_data, Mapping):
+        raise ConfigError("'document' section must be a mapping")
 
     chunk_size = _positive_int(source, "chunk_size", "source")
     chunk_overlap = _non_negative_int(source, "chunk_overlap", "source")
     if chunk_overlap >= chunk_size:
         raise ConfigError("'source.chunk_overlap' must be smaller than 'source.chunk_size'")
+
+    document_config: DocumentConfig | None = None
+    if isinstance(document_data, Mapping):
+        document_chunk_size = _positive_int(
+            document_data, "chunk_size", "document"
+        )
+        document_chunk_overlap = _non_negative_int(
+            document_data, "chunk_overlap", "document"
+        )
+        if document_chunk_overlap >= document_chunk_size:
+            raise ConfigError(
+                "'document.chunk_overlap' must be smaller than 'document.chunk_size'"
+            )
+        extensions = tuple(
+            value if value.startswith(".") else f".{value}"
+            for value in _string_tuple(document_data, "extensions", "document")
+        )
+        document_config = DocumentConfig(
+            enabled=_boolean(document_data, "enabled", "document"),
+            source_paths=_path_tuple(
+                document_data,
+                "source_paths",
+                "document",
+                project_root,
+            ),
+            extensions=tuple(value.casefold() for value in extensions),
+            exclude_directories=_string_tuple(
+                document_data,
+                "exclude_directories",
+                "document",
+            ),
+            chunk_size=document_chunk_size,
+            chunk_overlap=document_chunk_overlap,
+            collection_name=_required_string(
+                document_data,
+                "collection_name",
+                "document",
+            ),
+        )
 
     provider = _required_string(llm, "provider", "llm").lower()
     if provider not in {"llama_cpp", "ollama"}:
@@ -234,6 +298,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
                 _required_string(logging_config, "path", "logging"), project_root
             ),
         ),
+        document=document_config,
     )
 
 

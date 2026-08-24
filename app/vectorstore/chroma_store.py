@@ -1,4 +1,4 @@
-"""Persistent ChromaDB storage for embedded C# source chunks."""
+"""Persistent ChromaDB storage for embedded EquipmentRAG chunks."""
 
 from __future__ import annotations
 
@@ -9,13 +9,20 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from numbers import Real
 from threading import RLock
-from typing import Any
+from typing import Any, Protocol
 
 from app.config import ChromaConfig, load_config
 
 
 class VectorStoreError(RuntimeError):
     """Raised when vector-store input is invalid or ChromaDB fails."""
+
+
+class MetadataCodec(Protocol):
+    def to_chroma(self) -> Mapping[str, str | int | float | bool]: ...
+
+    @classmethod
+    def from_chroma(cls, value: Mapping[str, Any] | None) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -117,14 +124,14 @@ class VectorRecord:
     id: str
     document: str
     embedding: Sequence[float]
-    metadata: ChunkMetadata
+    metadata: MetadataCodec
 
 
 @dataclass(frozen=True)
 class StoredRecord:
     id: str
     document: str
-    metadata: ChunkMetadata
+    metadata: MetadataCodec
 
 
 @dataclass(frozen=True)
@@ -135,7 +142,13 @@ class SearchResult(StoredRecord):
 class PersistentChromaStore:
     """Store and query precomputed embeddings in a local Chroma collection."""
 
-    def __init__(self, config: ChromaConfig, expected_dimension: int) -> None:
+    def __init__(
+        self,
+        config: ChromaConfig,
+        expected_dimension: int,
+        *,
+        metadata_type: type[MetadataCodec] = ChunkMetadata,
+    ) -> None:
         if (
             isinstance(expected_dimension, bool)
             or not isinstance(expected_dimension, int)
@@ -144,6 +157,7 @@ class PersistentChromaStore:
             raise VectorStoreError("expected_dimension must be a positive integer")
         self._config = config
         self._expected_dimension = expected_dimension
+        self._metadata_type = metadata_type
         self._client: Any | None = None
         self._collection: Any | None = None
         self._load_lock = RLock()
@@ -292,7 +306,6 @@ class PersistentChromaStore:
             not isinstance(equipment, str) or not equipment.strip()
         ):
             raise VectorStoreError("equipment must be a non-empty string")
-        collection = self._get_collection()
         where: dict[str, Any]
         if equipment is None:
             where = {"file_path": file_path}
@@ -303,25 +316,26 @@ class PersistentChromaStore:
                     {"equipment": equipment},
                 ]
             }
-        try:
-            existing = collection.get(where=where, include=[])["ids"]
-            if existing:
-                collection.delete(where=where)
-        except Exception as exc:
-            raise VectorStoreError("Unable to delete records for file_path") from exc
-        return len(existing)
+        return self.delete_where(where)
 
     def delete_by_equipment(self, equipment: str) -> int:
         if not isinstance(equipment, str) or not equipment.strip():
             raise VectorStoreError("equipment must be a non-empty string")
+        return self.delete_where({"equipment": equipment})
+
+    def delete_where(self, where: Mapping[str, Any]) -> int:
+        """Delete records matching a validated Chroma metadata filter."""
+
+        if not isinstance(where, Mapping) or not where:
+            raise VectorStoreError("where must be a non-empty mapping")
         collection = self._get_collection()
-        where = {"equipment": equipment}
+        normalized = dict(where)
         try:
-            existing = collection.get(where=where, include=[])["ids"]
+            existing = collection.get(where=normalized, include=[])["ids"]
             if existing:
-                collection.delete(where=where)
+                collection.delete(where=normalized)
         except Exception as exc:
-            raise VectorStoreError("Unable to delete records for equipment") from exc
+            raise VectorStoreError("Unable to delete ChromaDB records by filter") from exc
         return len(existing)
 
     def _get_collection(self) -> Any:
@@ -349,8 +363,10 @@ class PersistentChromaStore:
             seen_ids.add(record_id)
             if not isinstance(record.document, str) or not record.document.strip():
                 raise VectorStoreError("record.document must be a non-empty string")
-            if not isinstance(record.metadata, ChunkMetadata):
-                raise VectorStoreError("record.metadata must be ChunkMetadata")
+            if not isinstance(record.metadata, self._metadata_type):
+                raise VectorStoreError(
+                    "record.metadata must be " + self._metadata_type.__name__
+                )
             validated.append((record, self._validate_embedding(record.embedding)))
         return validated
 
@@ -389,8 +405,7 @@ class PersistentChromaStore:
             embedding.append(converted)
         return embedding
 
-    @staticmethod
-    def _parse_stored_records(payload: Mapping[str, Any]) -> list[StoredRecord]:
+    def _parse_stored_records(self, payload: Mapping[str, Any]) -> list[StoredRecord]:
         ids = payload.get("ids") or []
         documents = payload.get("documents") or []
         metadatas = payload.get("metadatas") or []
@@ -400,13 +415,12 @@ class PersistentChromaStore:
             StoredRecord(
                 id=record_id,
                 document=document,
-                metadata=ChunkMetadata.from_chroma(metadata),
+                metadata=self._metadata_type.from_chroma(metadata),
             )
             for record_id, document, metadata in zip(ids, documents, metadatas)
         ]
 
-    @staticmethod
-    def _parse_search_results(payload: Mapping[str, Any]) -> list[SearchResult]:
+    def _parse_search_results(self, payload: Mapping[str, Any]) -> list[SearchResult]:
         ids_batches = payload.get("ids") or [[]]
         document_batches = payload.get("documents") or [[]]
         metadata_batches = payload.get("metadatas") or [[]]
@@ -432,7 +446,7 @@ class PersistentChromaStore:
             SearchResult(
                 id=record_id,
                 document=document,
-                metadata=ChunkMetadata.from_chroma(metadata),
+                metadata=self._metadata_type.from_chroma(metadata),
                 distance=float(distance),
             )
             for record_id, document, metadata, distance in zip(

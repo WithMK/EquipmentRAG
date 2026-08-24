@@ -18,10 +18,11 @@ htmlcov/
 config/config.local.yaml
 
 # Local models, offline packages, source material, and indexes
-models/
-wheels/
-data/source/
-data/chroma/
+/models/
+/wheels/
+/data/source/
+/data/documents/
+/data/chroma/
 *.gguf
 
 # Runtime output

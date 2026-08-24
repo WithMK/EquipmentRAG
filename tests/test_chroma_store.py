@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from app.config import ChromaConfig
+from app.models.document_models import DocumentChunkMetadata
 from app.vectorstore.chroma_store import (
     ChunkMetadata,
     PersistentChromaStore,
@@ -198,6 +199,46 @@ class ChromaStoreTests(unittest.TestCase):
         incompatible = self._store(dimension=2)
         with self.assertRaisesRegex(VectorStoreError, "does not match"):
             incompatible.open()
+
+    def test_reuses_store_with_document_metadata_codec(self) -> None:
+        document_config = ChromaConfig(
+            path=self.temp_path / "document-chroma",
+            collection_name="document_chunks",
+        )
+        store = PersistentChromaStore(
+            document_config,
+            3,
+            metadata_type=DocumentChunkMetadata,
+        )
+        self.stores.append(store)
+        metadata = DocumentChunkMetadata(
+            document_id="spec-001",
+            source_path="Specs/Loader.docx",
+            file_name="Loader.docx",
+            file_extension=".docx",
+            equipment="test-equipment",
+            chunk_index=0,
+            title="Loader Specification",
+            revision="Rev.3",
+            section="Loader Interlock",
+            file_hash="file-hash",
+            content_hash="content-hash",
+            indexed_at="2026-08-24T00:00:00Z",
+        )
+
+        store.upsert([VectorRecord("doc-1", "vacuum interlock", [1, 0, 0], metadata)])
+        result = store.search(
+            [1, 0, 0],
+            1,
+            where={"document_status": "active"},
+        )[0]
+
+        self.assertIsInstance(result.metadata, DocumentChunkMetadata)
+        self.assertEqual(result.metadata.revision, "Rev.3")
+        self.assertEqual(
+            store.delete_where({"document_id": "spec-001"}),
+            1,
+        )
 
 
 if __name__ == "__main__":
