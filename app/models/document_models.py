@@ -19,6 +19,7 @@ class DocumentSourceFile:
     relative_path: str
     root_name: str
     file_hash: str
+    state_hash: str
     modified_time: str
     metadata: Mapping[str, Any]
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -72,13 +73,21 @@ class DocumentScanner:
             ).isoformat()
         except OSError as exc:
             raise DocumentScanError(f"Unable to read document: {path}") from exc
+        metadata = self._load_sidecar(path)
+        metadata_bytes = json.dumps(
+            metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
         return DocumentSourceFile(
             path=path.resolve(strict=False),
             relative_path=relative_path,
             root_name=root_name,
             file_hash=hashlib.sha256(raw).hexdigest(),
+            state_hash=hashlib.sha256(raw + b"\0" + metadata_bytes).hexdigest(),
             modified_time=modified,
-            metadata=self._load_sidecar(path),
+            metadata=metadata,
         )
 
     @staticmethod
@@ -101,4 +110,3 @@ class DocumentScanner:
                 f"Document metadata sidecar must be a mapping: {sidecar}"
             )
         return dict(payload)
-
