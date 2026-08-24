@@ -1,4 +1,4 @@
-"""Document parser registry for the Phase 1 file formats."""
+"""Document parser registry for supported offline document formats."""
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ from app.parsers.document_parser import DocumentParseError, DocumentParser
 from app.parsers.docx_parser import DocxDocumentParser
 from app.parsers.markdown_parser import MarkdownDocumentParser
 from app.parsers.pdf_parser import PdfDocumentParser
+from app.parsers.pptx_parser import PptxDocumentParser
 from app.parsers.text_parser import TextDocumentParser
+from app.parsers.xlsx_parser import XlsxDocumentParser
 
 
 class DocumentParserRegistry:
@@ -15,6 +17,8 @@ class DocumentParserRegistry:
         self._parsers = parsers or {
             ".docx": DocxDocumentParser(),
             ".pdf": PdfDocumentParser(),
+            ".pptx": PptxDocumentParser(),
+            ".xlsx": XlsxDocumentParser(),
             ".md": MarkdownDocumentParser(),
             ".txt": TextDocumentParser(),
         }

@@ -16,7 +16,7 @@ class DocumentParserTests(unittest.TestCase):
         self.config = DocumentConfig(
             enabled=True,
             source_paths=(self.root,),
-            extensions=(".docx", ".pdf", ".md", ".txt"),
+            extensions=(".docx", ".pdf", ".pptx", ".xlsx", ".md", ".txt"),
             exclude_directories=("archive",),
             chunk_size=500,
             chunk_overlap=50,
@@ -124,6 +124,72 @@ class DocumentParserTests(unittest.TestCase):
         self.assertNotIn("CONFIDENTIAL", text)
         self.assertEqual({block.page for block in document.blocks}, {1, 2})
         self.assertIn("Vacuum timeout", text)
+
+    def test_pptx_preserves_slides_tables_and_speaker_notes(self) -> None:
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        path = self.root / "DesignReview.pptx"
+        presentation = Presentation()
+        presentation.core_properties.title = "Loader Design Review"
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = "Loader Safety"
+        body = slide.placeholders[1].text_frame
+        body.text = "Safety door must be closed."
+        bullet = body.add_paragraph()
+        bullet.text = "Vacuum sensor must be ON."
+        bullet.level = 1
+        table = slide.shapes.add_table(
+            2,
+            2,
+            Inches(1),
+            Inches(4),
+            Inches(6),
+            Inches(1),
+        ).table
+        table.cell(0, 0).text = "Signal"
+        table.cell(0, 1).text = "Condition"
+        table.cell(1, 0).text = "Vacuum"
+        table.cell(1, 1).text = "ON"
+        slide.notes_slide.notes_text_frame.text = "Verify PLC input X100."
+        presentation.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        document = DocumentParserRegistry().parse(source)
+
+        self.assertEqual(document.title, "Loader Design Review")
+        self.assertTrue(all(block.slide == 1 for block in document.blocks))
+        self.assertEqual(document.blocks[0].text, "Loader Safety")
+        self.assertTrue(any(block.type == "table" for block in document.blocks))
+        self.assertTrue(
+            any("Verify PLC input X100" in block.text for block in document.blocks)
+        )
+
+    def test_xlsx_preserves_sheets_regions_formulas_and_cell_ranges(self) -> None:
+        from openpyxl import Workbook
+
+        path = self.root / "Signals.xlsx"
+        workbook = Workbook()
+        workbook.properties.title = "Loader Signal List"
+        sheet = workbook.active
+        sheet.title = "Loader IO"
+        sheet.append(("Signal", "Description"))
+        sheet.append(("X100", "Vacuum sensor"))
+        sheet.append(("Result", "=COUNTA(A2:A2)"))
+        sheet.append((None, None))
+        sheet.append(("Alarm", "Recovery"))
+        sheet.append(("AL101", "Check vacuum"))
+        workbook.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        document = DocumentParserRegistry().parse(source)
+
+        self.assertEqual(document.title, "Loader Signal List")
+        tables = [block for block in document.blocks if block.type == "table"]
+        self.assertEqual([block.cell_range for block in tables], ["A1:B3", "A5:B6"])
+        self.assertTrue(all(block.sheet == "Loader IO" for block in tables))
+        self.assertIn("Formula: =COUNTA(A2:A2)", tables[0].text)
+        self.assertIn("AL101", tables[1].text)
 
 
 def _write_pdf(path: Path, page_lines: list[list[str]]) -> None:

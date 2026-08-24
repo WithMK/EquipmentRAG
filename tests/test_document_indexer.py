@@ -257,6 +257,50 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
         self.assertEqual(settings.reindex_reason, "index_settings_changed")
         self.assertEqual(settings.reindexed_files, ("Alarm.txt", "Manual.md"))
 
+    def test_indexes_office_documents_with_exact_source_locations(self) -> None:
+        from openpyxl import Workbook
+        from pptx import Presentation
+
+        presentation_path = self.documents / "Review.pptx"
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[1])
+        slide.shapes.title.text = "Loader Safety"
+        slide.placeholders[1].text = "Door closed and vacuum sensor ON"
+        presentation.save(presentation_path)
+
+        workbook_path = self.documents / "Signals.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Loader IO"
+        sheet.append(("Signal", "Description"))
+        sheet.append(("X100", "Vacuum sensor"))
+        workbook.save(workbook_path)
+
+        assert self.config.document is not None
+        office_config = replace(
+            self.config,
+            document=replace(
+                self.config.document,
+                extensions=(".pptx", ".xlsx"),
+            ),
+        )
+
+        report = self._indexer(office_config).run()
+
+        self.assertEqual(report.new_files, ("Review.pptx", "Signals.xlsx"))
+        metadata = [record.metadata for record in self.store.records.values()]
+        self.assertTrue(
+            any(item.file_name == "Review.pptx" and item.slide == 1 for item in metadata)
+        )
+        self.assertTrue(
+            any(
+                item.file_name == "Signals.xlsx"
+                and item.sheet == "Loader IO"
+                and item.cell_range == "A1:B2"
+                for item in metadata
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
