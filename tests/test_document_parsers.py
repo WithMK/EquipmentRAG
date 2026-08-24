@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from app.config import DocumentConfig
+from app.parsers.document_parser import DocumentParseError
 from app.parsers.document_parsers import DocumentParserRegistry
 from app.parsers.document_scanner import DocumentScanner
 
@@ -190,6 +191,98 @@ class DocumentParserTests(unittest.TestCase):
         self.assertTrue(all(block.sheet == "Loader IO" for block in tables))
         self.assertIn("Formula: =COUNTA(A2:A2)", tables[0].text)
         self.assertIn("AL101", tables[1].text)
+
+    def test_pptx_reads_grouped_text_and_titleless_slides(self) -> None:
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        path = self.root / "GroupedReview.pptx"
+        presentation = Presentation()
+        first = presentation.slides.add_slide(presentation.slide_layouts[1])
+        first.shapes.title.text = "Sequence Review"
+        first.placeholders[1].text = "Loader pickup sequence"
+        second = presentation.slides.add_slide(presentation.slide_layouts[6])
+        group = second.shapes.add_group_shape()
+        text_box = group.shapes.add_textbox(
+            Inches(1),
+            Inches(1),
+            Inches(5),
+            Inches(1),
+        )
+        text_box.text = "Manual recovery requires safety reset."
+        presentation.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        document = DocumentParserRegistry().parse(source)
+
+        headings = [block for block in document.blocks if block.type == "heading"]
+        self.assertEqual([(block.text, block.slide) for block in headings], [
+            ("Sequence Review", 1),
+            ("Slide 2", 2),
+        ])
+        self.assertTrue(
+            any(
+                block.slide == 2 and "Manual recovery" in block.text
+                for block in document.blocks
+            )
+        )
+
+    def test_xlsx_reads_multiple_sheets_and_typed_values(self) -> None:
+        from datetime import date
+
+        from openpyxl import Workbook
+
+        path = self.root / "Parameters.xlsx"
+        workbook = Workbook()
+        parameters = workbook.active
+        parameters.title = "Parameters"
+        parameters.append(("Enabled", "Limit", "Effective Date"))
+        parameters.append((True, 12.5, date(2026, 8, 24)))
+        alarms = workbook.create_sheet("Alarm List")
+        alarms.append(("Code", "Description"))
+        alarms.append(("AL101", "Vacuum timeout"))
+        workbook.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        document = DocumentParserRegistry().parse(source)
+
+        tables = [block for block in document.blocks if block.type == "table"]
+        self.assertEqual(
+            [(block.sheet, block.cell_range) for block in tables],
+            [("Parameters", "A1:C2"), ("Alarm List", "A1:B2")],
+        )
+        self.assertIn("TRUE", tables[0].text)
+        self.assertIn("12.5", tables[0].text)
+        self.assertIn("2026-08-24", tables[0].text)
+
+    def test_rejects_corrupt_office_files_with_clear_errors(self) -> None:
+        pptx = self.root / "Broken.pptx"
+        pptx.write_bytes(b"not a presentation")
+        source = DocumentScanner(self.config).scan()[0]
+
+        with self.assertRaisesRegex(DocumentParseError, "Unable to parse PPTX"):
+            DocumentParserRegistry().parse(source)
+
+        pptx.unlink()
+        xlsx = self.root / "Broken.xlsx"
+        xlsx.write_bytes(b"not a workbook")
+        source = DocumentScanner(self.config).scan()[0]
+
+        with self.assertRaisesRegex(DocumentParseError, "Unable to parse XLSX"):
+            DocumentParserRegistry().parse(source)
+
+    def test_rejects_xlsx_above_the_sheet_scan_limit(self) -> None:
+        from openpyxl import Workbook
+
+        path = self.root / "Oversized.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.cell(row=2000, column=501).value = "outside safety limit"
+        workbook.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        with self.assertRaisesRegex(DocumentParseError, "too large to scan safely"):
+            DocumentParserRegistry().parse(source)
 
 
 def _write_pdf(path: Path, page_lines: list[list[str]]) -> None:
