@@ -26,4 +26,3 @@ class DocumentParserRegistry:
                 f"No document parser registered for: {source.extension}"
             )
         return parser.parse(source)
-

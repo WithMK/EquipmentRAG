@@ -165,4 +165,3 @@ def _write_pdf(path: Path, page_lines: list[list[str]]) -> None:
 
 if __name__ == "__main__":
     unittest.main()
-

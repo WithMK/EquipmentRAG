@@ -77,4 +77,3 @@ class MarkdownDocumentParser:
             blocks,
             detected_title=detected_title,
         )
-

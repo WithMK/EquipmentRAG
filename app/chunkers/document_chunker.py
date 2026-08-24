@@ -150,4 +150,3 @@ class DocumentChunker:
         if block.type == "code":
             return "Code:\n```\n" + block.text + "\n```"
         return block.text
-

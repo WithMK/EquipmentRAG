@@ -92,4 +92,3 @@ def _date_string(value: Any) -> str:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     return ""
-

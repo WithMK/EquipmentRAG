@@ -50,4 +50,3 @@ def _is_heading(value: str) -> bool:
         or _NUMBERED_HEADING.match(value)
         or (value.isupper() and any(character.isalpha() for character in value))
     )
-
