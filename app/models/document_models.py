@@ -196,4 +196,3 @@ class DocumentChunkMetadata:
             raise DocumentModelError(
                 f"Document metadata is missing field: {exc.args[0]}"
             ) from exc
-
