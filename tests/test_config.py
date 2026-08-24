@@ -60,9 +60,19 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.equipment.name, "replace-with-equipment-name")
         self.assertEqual(config.llm.provider, "llama_cpp")
+        self.assertEqual(config.source.path, Path("D:/EquipmentData/source"))
+        assert config.document is not None
+        self.assertEqual(
+            config.document.source_paths,
+            (Path("D:/EquipmentData/documents"),),
+        )
         self.assertEqual(
             config.embedding.model_path,
             Path("D:/OfflineAssets/models/embedding/bge-m3"),
+        )
+        self.assertEqual(
+            config.chromadb.path,
+            Path("D:/OfflineRuntime/EquipmentRAG/chroma"),
         )
 
     def test_loads_and_resolves_relative_paths_from_project_root(self) -> None:
