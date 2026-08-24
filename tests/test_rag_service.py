@@ -324,6 +324,44 @@ class RagServiceTests(unittest.TestCase):
         self.assertIn("Section: Loader Interlock", output)
         self.assertIn("Text:\nVacuum sensor", output)
 
+    def test_document_mode_exposes_office_source_locations(self) -> None:
+        metadata = DocumentChunkMetadata(
+            document_id="loader-io",
+            source_path="Signals/Loader.xlsx",
+            file_name="Loader.xlsx",
+            file_extension=".xlsx",
+            equipment="press-line-01",
+            chunk_index=0,
+            document_type="Signal List",
+            section="Loader IO",
+            sheet="Loader IO",
+            cell_range="A1:B12",
+        )
+        result = DocumentSearchResult(
+            rank=1,
+            chunk_id="xlsx-1",
+            score=0.92,
+            distance=0.08,
+            text="X100 | Vacuum sensor",
+            metadata=metadata,
+        )
+        service = RagService(
+            _config(self.root),
+            search=FakeDocumentSearch([result]),
+            llm_client=self.llm,
+            source_type="document",
+        )
+
+        answer = service.ask("Vacuum sensor signal?")
+
+        messages, _, _ = self.llm.calls[-1]
+        self.assertIn("Sheet: Loader IO", messages[1].content)
+        self.assertIn("Cells: A1:B12", messages[1].content)
+        self.assertEqual(answer.sources[0].cell_range, "A1:B12")
+        output = format_rag_answer(answer)
+        self.assertIn("Sheet: Loader IO", output)
+        self.assertIn("Cells: A1:B12", output)
+
 
 if __name__ == "__main__":
     unittest.main()

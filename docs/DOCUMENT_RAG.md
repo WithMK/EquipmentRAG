@@ -1,6 +1,6 @@
 # Document RAG Phase 1
 
-EquipmentRAG can index and retrieve DOCX, text-based PDF, Markdown, and TXT
+EquipmentRAG can index and retrieve DOCX, text-based PDF, PPTX, XLSX, Markdown, and TXT
 documents without changing the existing C# Code RAG path. Documents use the
 `document_chunks` ChromaDB collection while code continues to use the collection
 configured under `chromadb.collection_name`.
@@ -14,7 +14,7 @@ document:
   enabled: true
   source_paths:
     - D:/EquipmentData/documents
-  extensions: [.docx, .pdf, .md, .txt]
+  extensions: [.docx, .pdf, .pptx, .xlsx, .md, .txt]
   exclude_directories: [.git, .vs, archive]
   chunk_size: 3000
   chunk_overlap: 300
@@ -103,7 +103,7 @@ results = retriever.retrieve(
 ```
 
 Each result contains the chunk ID, score, text, source path, and complete
-metadata including revision, section, page, slide, and sheet fields.
+metadata including revision, section, page, slide, sheet, and cell-range fields.
 
 ## Optional grounded answer
 
@@ -120,5 +120,5 @@ python -m app.rag_service "Loader Interlock 조건을 설명해줘." `
 ```
 
 The retrieval interface is the production integration point for a future Context
-Orchestrator. XLSX, PPTX content, OCR, hybrid search, and reranking can be added
+Orchestrator. OCR, chart interpretation, hybrid search, and reranking can be added
 without changing the normalized parser-to-chunker contract.

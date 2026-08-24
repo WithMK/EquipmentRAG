@@ -348,3 +348,21 @@ LLM 답변 검증은 기존 `RagService`에 `--source-type document`를 지정�
 Revision sidecar, Metadata Filter, CLI와 Context Orchestrator 연동 방법은
 [`docs/DOCUMENT_RAG.md`](docs/DOCUMENT_RAG.md)를 참고합니다. 실제 문서는
 `data/documents/`를 포함해 Git에서 제외된 사내 경로에만 둡니다.
+
+## Phase 12: Office Document RAG
+
+Document RAG에 PPTX와 XLSX Parser를 추가했습니다. PPTX는 Slide 제목, 본문,
+표와 Speaker Notes를 Slide 번호와 함께 저장합니다. XLSX는 Sheet별 연속 표 영역을
+추출하고 Sheet 이름, Cell 범위, 수식 문자열과 저장된 값을 보존합니다.
+
+```powershell
+python -m app.document_indexer --config config\config.local.yaml
+
+python -m app.document_search "Loader IO Signal" `
+  --config config\config.local.yaml `
+  --document-type "Signal List"
+```
+
+이미지 OCR, Chart 의미 해석, Excel 수식 재계산, `.ppt`와 `.xls`는 이번 범위에
+포함되지 않습니다. 상세 내용은
+[`docs/OFFICE_DOCUMENT_RAG.md`](docs/OFFICE_DOCUMENT_RAG.md)를 참고합니다.

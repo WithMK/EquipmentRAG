@@ -23,6 +23,8 @@ document:
   extensions:
     - .docx
     - .pdf
+    - .pptx
+    - .xlsx
     - .md
     - .txt
   exclude_directories:

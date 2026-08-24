@@ -63,6 +63,32 @@ class DocumentChunkerTests(unittest.TestCase):
         )
         self.assertTrue(all(chunk.content_hash for chunk in chunks))
 
+    def test_preserves_slide_sheet_and_cell_range_locations(self) -> None:
+        presentation = _document(
+            (
+                DocumentBlock("heading", "Loader Safety", level=1, slide=2),
+                DocumentBlock("paragraph", "Door closed", slide=2),
+            )
+        )
+        workbook = _document(
+            (
+                DocumentBlock("heading", "Loader IO", level=1, sheet="Loader IO"),
+                DocumentBlock(
+                    "table",
+                    "Signal | Description\nX100 | Vacuum sensor",
+                    sheet="Loader IO",
+                    cell_range="A1:B2",
+                ),
+            )
+        )
+
+        presentation_chunks = DocumentChunker(500, 50).chunk(presentation)
+        workbook_chunks = DocumentChunker(500, 50).chunk(workbook)
+
+        self.assertEqual(presentation_chunks[0].slide, 2)
+        self.assertEqual(workbook_chunks[0].sheet, "Loader IO")
+        self.assertEqual(workbook_chunks[0].cell_range, "A1:B2")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -290,6 +290,7 @@ class IncrementalDocumentIndexer:
                 page=chunk.page,
                 slide=chunk.slide,
                 sheet=chunk.sheet,
+                cell_range=chunk.cell_range,
                 created_date=document.created_date,
                 modified_date=document.modified_date,
                 file_hash=document.file_hash,

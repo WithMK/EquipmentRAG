@@ -89,6 +89,7 @@ class RagSource:
     page: int = 0
     slide: int = 0
     sheet: str = ""
+    cell_range: str = ""
 
     @classmethod
     def from_search_result(cls, result: CodeSearchResult) -> "RagSource":
@@ -130,6 +131,7 @@ class RagSource:
             page=metadata.page,
             slide=metadata.slide,
             sheet=metadata.sheet,
+            cell_range=metadata.cell_range,
         )
 
     def to_dict(self, *, include_code: bool = False) -> dict[str, object]:
@@ -311,6 +313,9 @@ def _format_context_source(source: RagSource) -> str:
                 f"Status: {source.document_status or 'Unknown'}",
                 f"Section: {section}",
                 f"Page: {source.page or 'Unknown'}",
+                f"Slide: {source.slide or 'Unknown'}",
+                f"Sheet: {source.sheet or 'Unknown'}",
+                f"Cells: {source.cell_range or 'Unknown'}",
                 f"Path: {source.file_path or source.relative_path}",
                 "Text:",
                 source.code,
@@ -375,6 +380,9 @@ def format_rag_answer(
                     f"Revision: {source.revision or 'Unknown'}",
                     f"Section: {source.subsection or source.section or 'Unknown'}",
                     f"Page: {source.page or 'Unknown'}",
+                    f"Slide: {source.slide or 'Unknown'}",
+                    f"Sheet: {source.sheet or 'Unknown'}",
+                    f"Cells: {source.cell_range or 'Unknown'}",
                     f"Path: {source.file_path or source.relative_path}",
                 )
             )
