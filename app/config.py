@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Mapping, Sequence
 
 import yaml
@@ -170,7 +170,10 @@ def _path_tuple(
 
 
 def _resolve_path(raw_path: str, project_root: Path) -> Path:
-    expanded = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+    expanded_text = os.path.expandvars(os.path.expanduser(raw_path))
+    expanded = Path(expanded_text)
+    if not expanded.is_absolute() and PureWindowsPath(expanded_text).is_absolute():
+        return expanded
     if not expanded.is_absolute():
         expanded = project_root / expanded
     return expanded.resolve(strict=False)
