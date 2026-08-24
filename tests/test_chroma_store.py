@@ -240,6 +240,21 @@ class ChromaStoreTests(unittest.TestCase):
             1,
         )
 
+    def test_document_metadata_accepts_records_before_cell_range(self) -> None:
+        metadata = DocumentChunkMetadata(
+            document_id="legacy-spec",
+            source_path="Specs/Legacy.docx",
+            file_name="Legacy.docx",
+            file_extension=".docx",
+            equipment="test-equipment",
+            chunk_index=0,
+        ).to_chroma()
+        del metadata["cell_range"]
+
+        restored = DocumentChunkMetadata.from_chroma(metadata)
+
+        self.assertEqual(restored.cell_range, "")
+
 
 if __name__ == "__main__":
     unittest.main()

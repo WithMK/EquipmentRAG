@@ -226,6 +226,9 @@ def format_document_results(
             f"Revision: {metadata.revision or 'Unknown'}",
             f"Section: {metadata.heading_path or metadata.section or 'Unknown'}",
             f"Page: {metadata.page or 'Unknown'}",
+            f"Slide: {metadata.slide or 'Unknown'}",
+            f"Sheet: {metadata.sheet or 'Unknown'}",
+            f"Cells: {metadata.cell_range or 'Unknown'}",
             f"Path: {metadata.source_path}",
         ]
         if include_text:

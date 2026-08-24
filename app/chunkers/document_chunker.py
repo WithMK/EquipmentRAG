@@ -18,6 +18,7 @@ class _Group:
     page: int
     slide: int
     sheet: str
+    cell_range: str
 
 
 class DocumentChunker:
@@ -53,6 +54,7 @@ class DocumentChunker:
                         page=group.page,
                         slide=group.slide,
                         sheet=group.sheet,
+                        cell_range=group.cell_range,
                     )
                 )
         return chunks
@@ -62,7 +64,7 @@ class DocumentChunker:
         heading_levels: dict[int, str] = {}
         current: list[DocumentBlock] = []
         groups: list[_Group] = []
-        current_location = (0, 0, "")
+        current_location = (0, 0, "", "")
 
         def flush() -> None:
             if not current:
@@ -81,9 +83,19 @@ class DocumentChunker:
                     if old_level >= level:
                         del heading_levels[old_level]
                 heading_levels[level] = block.text.strip()
-                current_location = (block.page, block.slide, block.sheet)
+                current_location = (
+                    block.page,
+                    block.slide,
+                    block.sheet,
+                    block.cell_range,
+                )
                 continue
-            location = (block.page, block.slide, block.sheet)
+            location = (
+                block.page,
+                block.slide,
+                block.sheet,
+                block.cell_range,
+            )
             if current and location != current_location and any(location):
                 flush()
             if not current:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,7 @@ class DocumentBlock:
     page: int = 0
     slide: int = 0
     sheet: str = ""
+    cell_range: str = ""
     rows: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
@@ -49,6 +50,11 @@ class DocumentBlock:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise DocumentModelError(
                     f"Document block {field_name} must be a non-negative integer"
+                )
+        for field_name in ("sheet", "cell_range"):
+            if not isinstance(getattr(self, field_name), str):
+                raise DocumentModelError(
+                    f"Document block {field_name} must be a string"
                 )
 
 
@@ -92,6 +98,7 @@ class DocumentChunk:
     page: int
     slide: int
     sheet: str
+    cell_range: str
     content_hash: str
 
     @classmethod
@@ -103,6 +110,7 @@ class DocumentChunk:
         page: int = 0,
         slide: int = 0,
         sheet: str = "",
+        cell_range: str = "",
     ) -> "DocumentChunk":
         normalized = content.strip()
         if not normalized:
@@ -118,6 +126,7 @@ class DocumentChunk:
             page=page,
             slide=slide,
             sheet=sheet,
+            cell_range=cell_range,
             content_hash=digest,
         )
 
@@ -145,6 +154,7 @@ class DocumentChunkMetadata:
     page: int = 0
     slide: int = 0
     sheet: str = ""
+    cell_range: str = ""
     created_date: str = ""
     modified_date: str = ""
     file_hash: str = ""
@@ -186,13 +196,16 @@ class DocumentChunkMetadata:
     ) -> "DocumentChunkMetadata":
         if not isinstance(value, Mapping):
             raise DocumentModelError("ChromaDB returned invalid document metadata")
+        parsed: dict[str, Any] = {}
         try:
-            return cls(
-                **{
-                    field_name: value[field_name]
-                    for field_name in cls.__dataclass_fields__
-                }
-            )
+            for model_field in fields(cls):
+                if model_field.name in value:
+                    parsed[model_field.name] = value[model_field.name]
+                elif model_field.default is not MISSING:
+                    parsed[model_field.name] = model_field.default
+                else:
+                    raise KeyError(model_field.name)
+            return cls(**parsed)
         except KeyError as exc:
             raise DocumentModelError(
                 f"Document metadata is missing field: {exc.args[0]}"
