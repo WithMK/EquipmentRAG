@@ -1,0 +1,3 @@
+{"id":"loader-vacuum-code","query":"Loader Vacuum 감지 실패 조건","source_type":"code","top_k":5,"expected":[{"relative_path":"Controls/LoaderController.cs","method_name":"CheckVacuum"}]}
+{"id":"loader-vacuum-manual","query":"Loader Vacuum 알람 복구 절차","source_type":"document","top_k":5,"filters":{"document":{"unit":"Loader","document_type":"Maintenance Manual"}},"expected":[{"file_name":"LoaderManual.pdf","section":"Vacuum Alarm Recovery","revision":"Rev.3"}]}
+{"id":"loader-vacuum-unified","query":"Loader Vacuum 알람의 코드 조건과 문서 복구 절차","source_type":"all","top_k":6,"expected":[{"source_type":"code","class_name":"LoaderController","method_name":"CheckVacuum"},{"source_type":"document","file_name":"LoaderManual.pdf","section":"Vacuum Alarm Recovery"}]}

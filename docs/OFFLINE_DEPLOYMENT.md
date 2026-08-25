@@ -101,7 +101,51 @@ Document RAG를 포함하는 Release에는 `python-docx`, `lxml`, `pypdf`,
 `python-pptx`의 `Pillow`, `XlsxWriter`와 `openpyxl`의 `et-xmlfile` 같은 전이
 의존성도 wheel 디렉터리에 있어야 합니다. `requirements-offline.txt`로 수집하면
 함께 해결되며, 반입 대상 Python Minor Version과 Architecture가 동일한지
-확인합니다. OCR Runtime은 이번 Phase에 포함되지 않습니다.
+확인합니다. OCR을 사용하지 않는 기본 배포에는 별도 OCR Runtime이 필요하지
+않습니다.
+
+선택적 문서 OCR을 사용하는 배포에는 `requirements-vision.txt`로 PyMuPDF wheel을
+추가 수집하고, 승인된 Windows Tesseract 배포본과 `kor`, `eng` Language Data를
+별도 자산으로 반입합니다.
+
+```powershell
+python -m pip download `
+  --only-binary=:all: `
+  --dest ..\offline-bundle\wheels `
+  --requirement requirements-vision.txt
+```
+
+```text
+offline-bundle/tools/tesseract/tesseract.exe
+offline-bundle/tools/tesseract/tessdata/kor.traineddata
+offline-bundle/tools/tesseract/tessdata/eng.traineddata
+```
+
+Tesseract와 Language Data의 License 및 사내 반입 승인 여부를 확인하고, Runtime
+경로를 로컬 설정의 `visual.tesseract_path`에 지정합니다. OCR을 활성화하지 않는
+경우 `visual.enabled: false`를 유지합니다.
+
+Local API는 별도 Python Package가 필요하지 않습니다. 폐쇄망 PC에서 설치와 색인을
+마친 후 다음과 같이 Loopback 주소로 시작할 수 있습니다.
+
+```powershell
+python -m app serve --config config\config.local.yaml --host 127.0.0.1 --port 8765
+Invoke-RestMethod http://127.0.0.1:8765/health
+```
+
+다른 PC가 호출해야 한다면 `--allow-remote`를 추가하기 전에 사내 Firewall, TLS,
+인증 및 접근 기록 정책을 먼저 적용합니다. 상세 API 계약은 `docs/LOCAL_API.md`를
+참고합니다.
+
+Retrieval 품질 평가는 추가 Package나 LLM Server 없이 실행할 수 있습니다. 실제 설비
+질문과 기대 Source가 들어간 JSONL Dataset은 Repository가 아닌 승인된 내부 Data
+경로로 반입하고 `python -m app evaluate`로 측정합니다. 자세한 형식은
+`docs/EVALUATION.md`를 참고합니다.
+
+Local API를 시작하면 같은 Process가 `http://127.0.0.1:8765/`에서 Local UI도
+제공합니다. UI는 Repository 내부 HTML, CSS와 JavaScript만 사용하므로 별도 Package나
+Internet 연결이 필요하지 않습니다. 운영 및 보안 내용은 `docs/LOCAL_UI.md`를
+참고합니다.
 
 ## 5. 모델과 Runtime 준비
 

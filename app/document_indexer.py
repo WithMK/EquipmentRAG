@@ -22,6 +22,7 @@ from app.models.document_models import (
     DocumentSourceFile,
     NormalizedDocument,
 )
+from app.ocr.tesseract import TesseractOcrProvider
 from app.parsers.document_parser import DocumentParseError
 from app.parsers.document_parsers import DocumentParserRegistry
 from app.parsers.document_scanner import DocumentScanError, DocumentScanner
@@ -104,7 +105,7 @@ class IncrementalDocumentIndexer:
         self._config = config
         self._document = document
         self._scanner = scanner or DocumentScanner(document)
-        self._parsers = parsers or DocumentParserRegistry()
+        self._parsers = parsers or _build_parser_registry(config)
         self._chunker = chunker or DocumentChunker(
             document.chunk_size,
             document.chunk_overlap,
@@ -447,6 +448,28 @@ def _default_state_path(config: AppConfig, document: DocumentConfig) -> Path:
     return config.chromadb.path / f"document-index-state-{digest}.json"
 
 
+def _build_parser_registry(config: AppConfig) -> DocumentParserRegistry:
+    visual = config.visual
+    if visual is None or not visual.enabled:
+        return DocumentParserRegistry()
+    ocr = None
+    if visual.tesseract_path is not None and (
+        visual.pdf_ocr or visual.pptx_image_ocr
+    ):
+        ocr = TesseractOcrProvider(
+            visual.tesseract_path,
+            languages=visual.languages,
+            timeout_seconds=visual.timeout_seconds,
+        )
+    return DocumentParserRegistry(
+        ocr=ocr,
+        pdf_dpi=visual.pdf_dpi,
+        pdf_ocr=visual.pdf_ocr,
+        pptx_image_ocr=visual.pptx_image_ocr,
+        xlsx_chart_extraction=visual.xlsx_chart_extraction,
+    )
+
+
 def _settings_fingerprint(config: AppConfig, document: DocumentConfig) -> str:
     model_files = []
     for file_name in ("config.json", "modules.json", "model.safetensors"):
@@ -469,6 +492,20 @@ def _settings_fingerprint(config: AppConfig, document: DocumentConfig) -> str:
         "normalize_embeddings": config.embedding.normalize_embeddings,
         "equipment": config.equipment.name,
         "collection_name": document.collection_name,
+        "visual": (
+            {
+                "enabled": config.visual.enabled,
+                "tesseract_path": str(config.visual.tesseract_path),
+                "languages": config.visual.languages,
+                "timeout_seconds": config.visual.timeout_seconds,
+                "pdf_dpi": config.visual.pdf_dpi,
+                "pdf_ocr": config.visual.pdf_ocr,
+                "pptx_image_ocr": config.visual.pptx_image_ocr,
+                "xlsx_chart_extraction": config.visual.xlsx_chart_extraction,
+            }
+            if config.visual is not None
+            else None
+        ),
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

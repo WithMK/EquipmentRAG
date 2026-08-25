@@ -39,6 +39,9 @@ class _PendingRegion:
 
 
 class XlsxDocumentParser:
+    def __init__(self, *, extract_charts: bool = False) -> None:
+        self._extract_charts = extract_charts
+
     def parse(self, source: DocumentSourceFile) -> NormalizedDocument:
         try:
             from openpyxl import load_workbook
@@ -50,6 +53,7 @@ class XlsxDocumentParser:
 
         formula_book = None
         value_book = None
+        chart_book = None
         try:
             formula_book = load_workbook(
                 source.path,
@@ -61,7 +65,18 @@ class XlsxDocumentParser:
                 read_only=True,
                 data_only=True,
             )
-            blocks = self._blocks(formula_book, value_book, get_column_letter)
+            if self._extract_charts:
+                chart_book = load_workbook(
+                    source.path,
+                    read_only=False,
+                    data_only=False,
+                )
+            blocks = self._blocks(
+                formula_book,
+                value_book,
+                get_column_letter,
+                chart_book=chart_book,
+            )
             properties = formula_book.properties
             title = _string(properties.title)
             created = _date_string(properties.created)
@@ -76,6 +91,8 @@ class XlsxDocumentParser:
                 formula_book.close()
             if value_book is not None:
                 value_book.close()
+            if chart_book is not None:
+                chart_book.close()
 
         return build_normalized_document(
             source,
@@ -89,12 +106,19 @@ class XlsxDocumentParser:
         formula_book: Any,
         value_book: Any,
         get_column_letter: Any,
+        *,
+        chart_book: Any | None = None,
     ) -> list[DocumentBlock]:
         blocks: list[DocumentBlock] = []
         for formula_sheet in formula_book.worksheets:
             value_sheet = value_book[formula_sheet.title]
             regions = _sheet_regions(formula_sheet, value_sheet)
-            if not regions:
+            charts = (
+                tuple(chart_book[formula_sheet.title]._charts)
+                if chart_book is not None
+                else ()
+            )
+            if not regions and not charts:
                 continue
             blocks.append(
                 DocumentBlock(
@@ -120,7 +144,106 @@ class XlsxDocumentParser:
                         rows=region.rows,
                     )
                 )
+            for chart_index, chart in enumerate(charts, 1):
+                blocks.extend(
+                    _chart_blocks(chart, chart_index, formula_sheet.title)
+                )
         return blocks
+
+
+def _chart_blocks(chart: Any, chart_index: int, sheet: str) -> list[DocumentBlock]:
+    title = _rich_text(getattr(chart, "title", None)) or f"Chart {chart_index}"
+    lines = [f"Chart type: {type(chart).__name__}", f"Title: {title}"]
+    for label, attribute in (
+        ("X axis", "x_axis"),
+        ("Y axis", "y_axis"),
+        ("Z axis", "z_axis"),
+    ):
+        axis = getattr(chart, attribute, None)
+        axis_title = _rich_text(getattr(axis, "title", None))
+        if axis_title:
+            lines.append(f"{label}: {axis_title}")
+
+    references: list[str] = []
+    for series_index, series in enumerate(getattr(chart, "ser", ()), 1):
+        series_title = _series_title(series)
+        if series_title:
+            lines.append(f"Series {series_index} title: {series_title}")
+        for label, reference in _series_references(series):
+            lines.append(f"Series {series_index} {label}: {reference}")
+            references.append(reference)
+
+    return [
+        DocumentBlock("heading", f"Chart: {title}", level=2, sheet=sheet),
+        DocumentBlock(
+            "paragraph",
+            "\n".join(lines),
+            sheet=sheet,
+            cell_range="; ".join(dict.fromkeys(references)),
+        ),
+    ]
+
+
+def _series_title(series: Any) -> str:
+    title = getattr(series, "tx", None)
+    value = getattr(title, "v", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    reference = _reference_formula(title)
+    return reference or ""
+
+
+def _series_references(series: Any) -> list[tuple[str, str]]:
+    references: list[tuple[str, str]] = []
+    for label, attribute in (
+        ("categories", "cat"),
+        ("values", "val"),
+        ("X values", "xVal"),
+        ("Y values", "yVal"),
+        ("Z values", "zVal"),
+    ):
+        formula = _reference_formula(getattr(series, attribute, None))
+        if formula:
+            references.append((label, formula))
+    return references
+
+
+def _reference_formula(value: Any) -> str:
+    if value is None:
+        return ""
+    for attribute in ("numRef", "strRef"):
+        reference = getattr(value, attribute, None)
+        formula = getattr(reference, "f", None)
+        if isinstance(formula, str) and formula.strip():
+            return formula.strip()
+    return ""
+
+
+def _rich_text(value: Any, *, _seen: set[int] | None = None, _depth: int = 0) -> str:
+    if value is None or _depth > 8:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (tuple, list)):
+        return " ".join(
+            item for child in value if (item := _rich_text(child, _seen=_seen, _depth=_depth + 1))
+        ).strip()
+    seen = _seen if _seen is not None else set()
+    identity = id(value)
+    if identity in seen:
+        return ""
+    seen.add(identity)
+    fragments: list[str] = []
+    for attribute in ("tx", "rich", "p", "r", "t", "v"):
+        if hasattr(value, attribute):
+            text = _rich_text(
+                getattr(value, attribute),
+                _seen=seen,
+                _depth=_depth + 1,
+            )
+            if text:
+                fragments.append(text)
+    return " ".join(fragments).strip()
 
 
 def _sheet_regions(

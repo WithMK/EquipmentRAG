@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="description" content="폐쇄망 설비 코드와 기술 문서를 검색하는 EquipmentRAG 로컬 화면">
+    <title>EquipmentRAG · Local Knowledge Console</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">본문으로 이동</a>
+    <header class="topbar">
+      <div class="brand-block">
+        <p class="eyebrow">LOCAL KNOWLEDGE SYSTEM</p>
+        <h1>Equipment<span>RAG</span></h1>
+      </div>
+      <div class="health" aria-live="polite">
+        <span id="health-dot" class="health-dot" aria-hidden="true"></span>
+        <div>
+          <strong id="health-label">연결 확인 중</strong>
+          <small id="equipment-label">Local API</small>
+        </div>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace">
+      <section class="query-panel" aria-labelledby="query-heading">
+        <div class="panel-heading">
+          <p class="step-number">01</p>
+          <div>
+            <h2 id="query-heading">질문 설정</h2>
+            <p>코드와 승인된 문서에서 근거를 찾습니다.</p>
+          </div>
+        </div>
+
+        <div class="mode-tabs" role="tablist" aria-label="실행 방식">
+          <button type="button" class="mode-tab active" role="tab" aria-selected="true" data-mode="answer">
+            답변 생성
+          </button>
+          <button type="button" class="mode-tab" role="tab" aria-selected="false" data-mode="retrieve">
+            근거만 검색
+          </button>
+        </div>
+
+        <form id="query-form">
+          <label for="query">질문</label>
+          <textarea id="query" name="query" rows="6" maxlength="8000" required placeholder="예: Loader Vacuum 알람 조건과 매뉴얼 복구 절차를 함께 설명해줘."></textarea>
+
+          <div class="field-row">
+            <div>
+              <label for="source-type">검색 대상</label>
+              <select id="source-type" name="source_type">
+                <option value="all">코드 + 문서</option>
+                <option value="code">코드만</option>
+                <option value="document">문서만</option>
+              </select>
+            </div>
+            <div>
+              <label for="top-k">근거 개수</label>
+              <input id="top-k" name="top_k" type="number" min="1" max="100" value="6">
+            </div>
+          </div>
+
+          <details class="advanced">
+            <summary>상세 필터</summary>
+            <div class="advanced-grid">
+              <div>
+                <label for="unit">설비 Unit</label>
+                <input id="unit" name="unit" placeholder="Loader">
+              </div>
+              <div>
+                <label for="document-type">문서 종류</label>
+                <input id="document-type" name="document_type" placeholder="Maintenance Manual">
+              </div>
+              <div>
+                <label for="revision">Revision</label>
+                <input id="revision" name="revision" placeholder="Rev.3">
+              </div>
+              <div>
+                <label for="class-name">Class</label>
+                <input id="class-name" name="class_name" placeholder="LoaderController">
+              </div>
+              <div>
+                <label for="method-name">Method</label>
+                <input id="method-name" name="method_name" placeholder="CheckVacuum">
+              </div>
+              <label class="check-field" for="include-content">
+                <input id="include-content" name="include_content" type="checkbox">
+                <span>검색 결과에 원문 포함</span>
+              </label>
+            </div>
+          </details>
+
+          <button id="submit-button" class="submit-button" type="submit">
+            <span id="submit-label">근거 기반 답변 생성</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+      </section>
+
+      <section class="result-panel" aria-labelledby="result-heading">
+        <div class="panel-heading result-heading-row">
+          <div class="heading-group">
+            <p class="step-number">02</p>
+            <div>
+              <h2 id="result-heading">분석 결과</h2>
+              <p id="result-summary">질문을 입력하면 결과가 여기에 표시됩니다.</p>
+            </div>
+          </div>
+          <button id="copy-button" class="ghost-button" type="button" hidden>답변 복사</button>
+        </div>
+
+        <div id="notice" class="notice" role="status" aria-live="polite">
+          <span class="notice-mark" aria-hidden="true">R</span>
+          <div>
+            <strong>근거 우선 분석</strong>
+            <p>답변은 색인된 Source만 사용합니다. 중요한 판단은 표시된 원문과 함께 확인하세요.</p>
+          </div>
+        </div>
+
+        <article id="answer-card" class="answer-card" hidden>
+          <div class="answer-meta">
+            <span>ANSWER</span>
+            <span id="model-label"></span>
+          </div>
+          <div id="answer-text" class="answer-text"></div>
+        </article>
+
+        <div id="empty-state" class="empty-state">
+          <div class="radar" aria-hidden="true"><span></span></div>
+          <h3>질문할 준비가 되었습니다</h3>
+          <p>알람 조건, IO 신호, Sequence, Interlock 또는 복구 절차를 질문해보세요.</p>
+        </div>
+
+        <section id="sources-section" class="sources-section" hidden aria-labelledby="sources-heading">
+          <div class="sources-title">
+            <h3 id="sources-heading">검색 근거</h3>
+            <span id="source-count" class="count-badge">0</span>
+          </div>
+          <div id="sources-list" class="sources-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      <span>OFFLINE · LOCAL ONLY</span>
+      <span>EquipmentRAG Knowledge Console</span>
+    </footer>
+  </body>
+</html>

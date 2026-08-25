@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from base64 import b64decode
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.config import DocumentConfig
 from app.parsers.document_parser import DocumentParseError
@@ -126,6 +129,28 @@ class DocumentParserTests(unittest.TestCase):
         self.assertEqual({block.page for block in document.blocks}, {1, 2})
         self.assertIn("Vacuum timeout", text)
 
+    def test_scanned_pdf_uses_configured_ocr_for_sparse_pages(self) -> None:
+        path = self.root / "Scanned.pdf"
+        _write_pdf(path, [[""]])
+        source = DocumentScanner(self.config).scan()[0]
+        ocr = _FakeOcr("스캔 문서 진공 센서 점검 절차")
+        pixmap = SimpleNamespace(tobytes=lambda _format: b"rendered-png")
+        page = SimpleNamespace(get_pixmap=lambda **_kwargs: pixmap)
+        document = SimpleNamespace(load_page=lambda _index: page, close=lambda: None)
+        fake_fitz = SimpleNamespace(
+            open=lambda _path: document,
+            Matrix=lambda x, y: (x, y),
+        )
+
+        with patch.dict("sys.modules", {"fitz": fake_fitz}):
+            normalized = DocumentParserRegistry(
+                ocr=ocr,
+                pdf_ocr=True,
+            ).parse(source)
+
+        self.assertIn("진공 센서", "\n".join(block.text for block in normalized.blocks))
+        self.assertEqual(ocr.calls, [(b"rendered-png", ".png")])
+
     def test_pptx_preserves_slides_tables_and_speaker_notes(self) -> None:
         from pptx import Presentation
         from pptx.util import Inches
@@ -166,6 +191,34 @@ class DocumentParserTests(unittest.TestCase):
             any("Verify PLC input X100" in block.text for block in document.blocks)
         )
 
+    def test_pptx_image_ocr_adds_traceable_text(self) -> None:
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        image_path = self.root / "alarm.png"
+        image_path.write_bytes(
+            b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+                "/x8AAusB9Wl2nKsAAAAASUVORK5CYII="
+            )
+        )
+        path = self.root / "ImageReview.pptx"
+        presentation = Presentation()
+        slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+        slide.shapes.add_picture(str(image_path), Inches(1), Inches(1))
+        presentation.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+        ocr = _FakeOcr("AL101 진공 타임아웃")
+
+        document = DocumentParserRegistry(
+            ocr=ocr,
+            pptx_image_ocr=True,
+        ).parse(source)
+
+        self.assertTrue(any(block.text == "Image OCR" for block in document.blocks))
+        self.assertTrue(any("AL101" in block.text for block in document.blocks))
+        self.assertTrue(all(block.slide == 1 for block in document.blocks))
+
     def test_xlsx_preserves_sheets_regions_formulas_and_cell_ranges(self) -> None:
         from openpyxl import Workbook
 
@@ -191,6 +244,38 @@ class DocumentParserTests(unittest.TestCase):
         self.assertTrue(all(block.sheet == "Loader IO" for block in tables))
         self.assertIn("Formula: =COUNTA(A2:A2)", tables[0].text)
         self.assertIn("AL101", tables[1].text)
+
+    def test_xlsx_extracts_chart_titles_series_and_references(self) -> None:
+        from openpyxl import Workbook
+        from openpyxl.chart import BarChart, Reference
+
+        path = self.root / "AlarmChart.xlsx"
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Alarms"
+        sheet.append(("Alarm", "Count"))
+        sheet.append(("AL101", 5))
+        sheet.append(("AL102", 2))
+        chart = BarChart()
+        chart.title = "Alarm Count"
+        chart.x_axis.title = "Alarm Code"
+        chart.y_axis.title = "Occurrences"
+        chart.add_data(Reference(sheet, min_col=2, min_row=1, max_row=3), titles_from_data=True)
+        chart.set_categories(Reference(sheet, min_col=1, min_row=2, max_row=3))
+        sheet.add_chart(chart, "D2")
+        workbook.save(path)
+        source = DocumentScanner(self.config).scan()[0]
+
+        document = DocumentParserRegistry(
+            xlsx_chart_extraction=True,
+        ).parse(source)
+
+        text = "\n".join(block.text for block in document.blocks)
+        self.assertIn("Chart: Alarm Count", text)
+        self.assertIn("X axis: Alarm Code", text)
+        self.assertIn("Y axis: Occurrences", text)
+        self.assertIn("'Alarms'!$B$2:$B$3", text)
+        self.assertIn("'Alarms'!$A$2:$A$3", text)
 
     def test_pptx_reads_grouped_text_and_titleless_slides(self) -> None:
         from pptx import Presentation
@@ -320,6 +405,16 @@ def _write_pdf(path: Path, page_lines: list[list[str]]) -> None:
         page[NameObject("/Contents")] = writer._add_object(stream)
     with path.open("wb") as output:
         writer.write(output)
+
+
+class _FakeOcr:
+    def __init__(self, result: str) -> None:
+        self.result = result
+        self.calls: list[tuple[bytes, str]] = []
+
+    def recognize(self, image_bytes: bytes, *, extension: str = ".png") -> str:
+        self.calls.append((image_bytes, extension))
+        return self.result
 
 
 if __name__ == "__main__":
