@@ -7,6 +7,7 @@ import re
 from collections import Counter
 
 from app.models.document_models import DocumentBlock, DocumentSourceFile, NormalizedDocument
+from app.ocr.tesseract import OcrError, OcrProvider
 from app.parsers.document_parser import DocumentParseError, build_normalized_document
 
 
@@ -14,6 +15,19 @@ _NUMBERED_HEADING = re.compile(r"^\d+(?:\.\d+)*[.)]?\s+\S+")
 
 
 class PdfDocumentParser:
+    def __init__(
+        self,
+        *,
+        ocr: OcrProvider | None = None,
+        ocr_dpi: int = 200,
+        min_text_chars: int = 20,
+    ) -> None:
+        if ocr_dpi <= 0 or min_text_chars <= 0:
+            raise ValueError("PDF OCR settings must be positive")
+        self._ocr = ocr
+        self._ocr_dpi = ocr_dpi
+        self._min_text_chars = min_text_chars
+
     def parse(self, source: DocumentSourceFile) -> NormalizedDocument:
         try:
             from pypdf import PdfReader
@@ -22,6 +36,10 @@ class PdfDocumentParser:
         try:
             reader = PdfReader(str(source.path))
             pages = [page.extract_text() or "" for page in reader.pages]
+            if self._ocr is not None:
+                pages = self._ocr_sparse_pages(source, pages)
+        except DocumentParseError:
+            raise
         except Exception as exc:
             raise DocumentParseError(f"Unable to parse PDF: {source.path}") from exc
 
@@ -72,6 +90,57 @@ class PdfDocumentParser:
             blocks,
             detected_title=detected_title,
         )
+
+    def _ocr_sparse_pages(
+        self,
+        source: DocumentSourceFile,
+        pages: list[str],
+    ) -> list[str]:
+        sparse = [
+            index
+            for index, text in enumerate(pages)
+            if len("".join(text.split())) < self._min_text_chars
+        ]
+        if not sparse:
+            return pages
+        try:
+            import fitz
+        except ImportError as exc:
+            raise DocumentParseError(
+                "PyMuPDF is required for scanned PDF OCR"
+            ) from exc
+
+        document = None
+        try:
+            document = fitz.open(str(source.path))
+            scale = self._ocr_dpi / 72
+            matrix = fitz.Matrix(scale, scale)
+            result = list(pages)
+            for index in sparse:
+                pixmap = document.load_page(index).get_pixmap(
+                    matrix=matrix,
+                    alpha=False,
+                )
+                text = self._ocr.recognize(
+                    pixmap.tobytes("png"),
+                    extension=".png",
+                )
+                if text.strip():
+                    result[index] = text
+            return result
+        except OcrError as exc:
+            raise DocumentParseError(
+                f"Unable to OCR PDF page {index + 1}: {source.path}"
+            ) from exc
+        except DocumentParseError:
+            raise
+        except Exception as exc:
+            raise DocumentParseError(
+                f"Unable to render PDF for OCR: {source.path}"
+            ) from exc
+        finally:
+            if document is not None:
+                document.close()
 
 
 def _remove_repeated_margins(pages: list[str]) -> list[str]:

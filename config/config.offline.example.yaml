@@ -35,6 +35,16 @@ document:
   chunk_overlap: 300
   collection_name: document_chunks
 
+visual:
+  enabled: false
+  tesseract_path: null
+  languages: kor+eng
+  timeout_seconds: 60
+  pdf_dpi: 200
+  pdf_ocr: true
+  pptx_image_ocr: true
+  xlsx_chart_extraction: true
+
 embedding:
   model_path: D:/OfflineAssets/models/embedding/bge-m3
   batch_size: 16
@@ -47,6 +57,13 @@ chromadb:
 
 search:
   top_k: 5
+  mode: semantic
+  candidate_multiplier: 4
+  semantic_weight: 0.7
+  lexical_weight: 0.3
+  reranker_model_path: null
+  reranker_weight: 0.5
+  reranker_device: null
 
 llm:
   provider: llama_cpp

@@ -42,6 +42,18 @@ class DocumentConfig:
 
 
 @dataclass(frozen=True)
+class VisualDocumentConfig:
+    enabled: bool
+    tesseract_path: Path | None
+    languages: str
+    timeout_seconds: int
+    pdf_dpi: int
+    pdf_ocr: bool
+    pptx_image_ocr: bool
+    xlsx_chart_extraction: bool
+
+
+@dataclass(frozen=True)
 class EmbeddingConfig:
     model_path: Path
     batch_size: int
@@ -58,6 +70,13 @@ class ChromaConfig:
 @dataclass(frozen=True)
 class SearchConfig:
     top_k: int
+    mode: str = "semantic"
+    candidate_multiplier: int = 4
+    semantic_weight: float = 0.7
+    lexical_weight: float = 0.3
+    reranker_model_path: Path | None = None
+    reranker_weight: float = 0.5
+    reranker_device: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +104,7 @@ class AppConfig:
     llm: LlmConfig
     logging: LoggingConfig
     document: DocumentConfig | None = None
+    visual: VisualDocumentConfig | None = None
 
     def safe_summary(self) -> dict[str, Any]:
         """Return a JSON-compatible summary without credential fields."""
@@ -149,6 +169,33 @@ def _boolean(data: Mapping[str, Any], key: str, section_name: str) -> bool:
     return value
 
 
+def _optional_number(
+    data: Mapping[str, Any],
+    key: str,
+    section_name: str,
+    default: float,
+) -> float:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"'{section_name}.{key}' must be a number")
+    converted = float(value)
+    if not 0.0 <= converted <= 1.0:
+        raise ConfigError(f"'{section_name}.{key}' must be between 0 and 1")
+    return converted
+
+
+def _optional_positive_int(
+    data: Mapping[str, Any],
+    key: str,
+    section_name: str,
+    default: int,
+) -> int:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"'{section_name}.{key}' must be a positive integer")
+    return value
+
+
 def _string_tuple(data: Mapping[str, Any], key: str, section_name: str) -> tuple[str, ...]:
     value = data.get(key)
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
@@ -209,6 +256,9 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
     document_data = parsed.get("document")
     if document_data is not None and not isinstance(document_data, Mapping):
         raise ConfigError("'document' section must be a mapping")
+    visual_data = parsed.get("visual")
+    if visual_data is not None and not isinstance(visual_data, Mapping):
+        raise ConfigError("'visual' section must be a mapping")
 
     chunk_size = _positive_int(source, "chunk_size", "source")
     chunk_overlap = _non_negative_int(source, "chunk_overlap", "source")
@@ -286,7 +336,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             path=_resolve_path(_required_string(chromadb, "path", "chromadb"), project_root),
             collection_name=_required_string(chromadb, "collection_name", "chromadb"),
         ),
-        search=SearchConfig(top_k=_positive_int(search, "top_k", "search")),
+        search=_build_search_config(search, project_root),
         llm=LlmConfig(
             provider=provider,
             base_url=_required_string(llm, "base_url", "llm").rstrip("/"),
@@ -302,6 +352,106 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             ),
         ),
         document=document_config,
+        visual=_build_visual_config(visual_data, project_root),
+    )
+
+
+def _build_search_config(
+    search: Mapping[str, Any],
+    project_root: Path,
+) -> SearchConfig:
+    mode_value = search.get("mode", "semantic")
+    if not isinstance(mode_value, str) or mode_value.strip().lower() not in {
+        "semantic",
+        "hybrid",
+    }:
+        raise ConfigError("'search.mode' must be 'semantic' or 'hybrid'")
+    semantic_weight = _optional_number(
+        search,
+        "semantic_weight",
+        "search",
+        0.7,
+    )
+    lexical_weight = _optional_number(
+        search,
+        "lexical_weight",
+        "search",
+        0.3,
+    )
+    if semantic_weight + lexical_weight <= 0:
+        raise ConfigError(
+            "'search.semantic_weight' and 'search.lexical_weight' cannot both be zero"
+        )
+    reranker_path_value = search.get("reranker_model_path")
+    if reranker_path_value is not None and (
+        not isinstance(reranker_path_value, str) or not reranker_path_value.strip()
+    ):
+        raise ConfigError(
+            "'search.reranker_model_path' must be a non-empty string or null"
+        )
+    reranker_device = _optional_string(search, "reranker_device", "search")
+    return SearchConfig(
+        top_k=_positive_int(search, "top_k", "search"),
+        mode=mode_value.strip().lower(),
+        candidate_multiplier=_optional_positive_int(
+            search,
+            "candidate_multiplier",
+            "search",
+            4,
+        ),
+        semantic_weight=semantic_weight,
+        lexical_weight=lexical_weight,
+        reranker_model_path=(
+            _resolve_path(reranker_path_value, project_root)
+            if isinstance(reranker_path_value, str)
+            else None
+        ),
+        reranker_weight=_optional_number(
+            search,
+            "reranker_weight",
+            "search",
+            0.5,
+        ),
+        reranker_device=reranker_device,
+    )
+
+
+def _build_visual_config(
+    visual: Mapping[str, Any] | None,
+    project_root: Path,
+) -> VisualDocumentConfig | None:
+    if visual is None:
+        return None
+    enabled = _boolean(visual, "enabled", "visual")
+    tesseract_value = visual.get("tesseract_path")
+    if tesseract_value is not None and (
+        not isinstance(tesseract_value, str) or not tesseract_value.strip()
+    ):
+        raise ConfigError("'visual.tesseract_path' must be a string or null")
+    languages = _required_string(visual, "languages", "visual")
+    pdf_ocr = _boolean(visual, "pdf_ocr", "visual")
+    pptx_image_ocr = _boolean(visual, "pptx_image_ocr", "visual")
+    if enabled and (pdf_ocr or pptx_image_ocr) and tesseract_value is None:
+        raise ConfigError(
+            "'visual.tesseract_path' is required when OCR is enabled"
+        )
+    return VisualDocumentConfig(
+        enabled=enabled,
+        tesseract_path=(
+            _resolve_path(tesseract_value, project_root)
+            if isinstance(tesseract_value, str)
+            else None
+        ),
+        languages=languages,
+        timeout_seconds=_positive_int(visual, "timeout_seconds", "visual"),
+        pdf_dpi=_positive_int(visual, "pdf_dpi", "visual"),
+        pdf_ocr=pdf_ocr,
+        pptx_image_ocr=pptx_image_ocr,
+        xlsx_chart_extraction=_boolean(
+            visual,
+            "xlsx_chart_extraction",
+            "visual",
+        ),
     )
 
 

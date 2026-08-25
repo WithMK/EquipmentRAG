@@ -1,15 +1,18 @@
 # EquipmentRAG
 
-Windows 폐쇄망에서 C# 설비 제어 소스코드를 색인하고 로컬 LLM으로 검색·분석하기 위한 최소 RAG PoC입니다.
+Windows 폐쇄망에서 C# 설비 제어 Source와 기술 문서를 색인하고 로컬 LLM으로
+검색·분석하기 위한 RAG 시스템입니다. 현재 Release Candidate는 `0.3.0-rc.1`입니다.
 
 ## 현재 범위
 
-Phase 10까지 로컬 RAG PoC 전 과정을 제공합니다. C# 증분 색인, Semantic Search, 근거 기반 RAG, llama.cpp/Ollama 전환과 Windows 폐쇄망 반입·설치·Gitea 이전 절차가 포함됩니다.
+Phase 20까지 Code/Document 증분 색인, 통합·Hybrid Search, Reranker, OCR,
+llama.cpp/Ollama 기반 답변, 대화형 CLI, Local API/UI, Retrieval 평가와 Windows
+폐쇄망 반입·검증 절차를 제공합니다.
 
 ## 요구 환경
 
 - Windows 11
-- Python 3.10 이상
+- Python 3.12 x64
 - 인터넷 연결 없이 사용할 로컬 임베딩 모델 및 LLM 서버
 
 ## 설치
@@ -23,7 +26,7 @@ python -m pip install -r requirements.txt
 폐쇄망 설치용 wheel은 외부망 PC에서 준비합니다.
 
 ```powershell
-python -m pip download -r requirements.txt -d wheels
+python deploy\download_offline_wheels.py
 ```
 
 폐쇄망 PC에서는 다음과 같이 설치합니다.
@@ -31,6 +34,10 @@ python -m pip download -r requirements.txt -d wheels
 ```powershell
 python -m pip install --no-index --find-links=.\wheels -r requirements-offline.txt
 ```
+
+Model과 Wheel은 GitHub에 올리지 않습니다. 1.9GB 분할 전송 Bundle 생성 방법과
+Release 검증 내용은 [`docs/RELEASE_0.3.0-rc.1.md`](docs/RELEASE_0.3.0-rc.1.md)를
+참고합니다.
 
 ## 설정
 
@@ -363,6 +370,271 @@ python -m app.document_search "Loader IO Signal" `
   --document-type "Signal List"
 ```
 
-이미지 OCR, Chart 의미 해석, Excel 수식 재계산, `.ppt`와 `.xls`는 이번 범위에
-포함되지 않습니다. 상세 내용은
+기본 Office Parser는 이미지 OCR이나 Excel 수식 재계산을 수행하지 않습니다.
+선택적 OCR과 Chart 메타데이터 추출은 Phase 17 설정으로 활성화할 수 있습니다.
+`.ppt`와 `.xls`는 지원하지 않습니다. 상세 내용은
 [`docs/OFFICE_DOCUMENT_RAG.md`](docs/OFFICE_DOCUMENT_RAG.md)를 참고합니다.
+
+## Phase 13: Code + Document 통합 RAG
+
+`all` Source Type은 같은 질문으로 C# 코드 Collection과 Document Collection을
+각각 검색한 뒤 결과를 하나의 Context로 결합합니다. Collection마다 Score 범위가
+다를 수 있으므로 각 결과 집합 안에서 Score를 정규화해 전체 `top_k` 안에서
+선택합니다. 코드 출처는 `[C1]`, 문서 출처는 `[D1]` 형식으로 구분됩니다.
+
+```powershell
+python -m app.rag_service `
+  "Loader Vacuum 알람 조건과 코드 및 매뉴얼 점검 절차를 함께 알려줘." `
+  --config config\config.local.yaml `
+  --source-type all `
+  --top-k 6
+```
+
+코드와 문서 Metadata Filter를 동시에 지정할 수 있습니다. 코드용 Filter는 코드
+검색에만, 문서용 Filter는 문서 검색에만 적용됩니다.
+
+```powershell
+python -m app.rag_service `
+  "Home 실패 조건과 복구 절차는?" `
+  --config config\config.local.yaml `
+  --source-type all `
+  --class-name AxisController `
+  --document-type "Maintenance Manual" `
+  --unit Loader
+```
+
+한쪽 Collection에 검색 결과가 없어도 다른 쪽 근거로 답변할 수 있습니다. 양쪽 모두
+결과가 없을 때만 LLM을 호출하지 않고 근거가 없다는 응답을 반환합니다. 기존
+`--source-type code`와 `--source-type document` 동작은 그대로 유지됩니다.
+
+## Phase 14: 대화형 질의와 후속 질문
+
+대화형 CLI는 최근 질문과 답변을 메모리에만 보관하고, 후속 질문마다 새로운 Source를
+검색합니다. 이전 답변은 질문 해석에만 사용하며 현재 답변의 근거로 취급하지 않습니다.
+기본 Source Type은 코드와 문서를 함께 사용하는 `all`입니다.
+
+```powershell
+python -m app.chat `
+  --config config\config.local.yaml `
+  --source-type all `
+  --top-k 6 `
+  --max-history-turns 4
+```
+
+```text
+You> Loader Vacuum 알람 조건과 점검 절차는?
+Assistant> ...
+You> 그중 코드에서 확인해야 할 메서드는?
+Assistant> ...
+```
+
+대화 중 다음 명령을 사용할 수 있습니다.
+
+```text
+/sources  직전 답변에 사용된 출처 표시
+/clear    대화 이력을 지우고 새 주제로 시작
+/help     명령 도움말
+/exit     대화 종료
+```
+
+매 답변 뒤 Source Metadata를 자동으로 표시하려면 `--show-sources`를 사용합니다.
+Source 본문까지 표시하려면 `--include-source-content`를 함께 지정해야 합니다. 대화
+이력은 파일이나 DB에 저장하지 않으며 프로세스 종료 또는 `/clear` 실행 시 제거됩니다.
+
+## Phase 15: 통합 운영 CLI
+
+별도 설치 스크립트 없이 프로젝트 루트에서 `python -m app`으로 코드와 문서의
+상태 확인, 색인, 검색, 단일 답변과 대화형 질의를 실행할 수 있습니다.
+
+```powershell
+python -m app --help
+python -m app status --config config\config.local.yaml
+```
+
+`status`는 외부 통신이나 LLM 호출 없이 Source 경로, Embedding 모델, ChromaDB와
+코드·문서 Index State의 존재 여부와 파일·Chunk 수를 확인합니다. JSON 결과가
+필요하면 `--json`을 지정합니다.
+
+코드와 활성화된 문서를 함께 증분 색인합니다.
+
+```powershell
+python -m app index `
+  --config config\config.local.yaml `
+  --source-type all
+```
+
+변경 예정 항목만 확인하거나 전체 재색인을 수행할 수 있습니다.
+
+```powershell
+python -m app index --config config\config.local.yaml --dry-run
+python -m app index --config config\config.local.yaml --full
+```
+
+LLM을 호출하지 않는 통합 검색, 한 번의 근거 기반 답변, 대화형 질의는 다음과
+같습니다. 세 명령의 기본 Source Type은 `all`입니다.
+
+```powershell
+python -m app search "Loader Vacuum alarm" `
+  --config config\config.local.yaml `
+  --top-k 6
+
+python -m app ask "알람 조건과 점검 절차를 설명해줘." `
+  --config config\config.local.yaml `
+  --top-k 6
+
+python -m app chat `
+  --config config\config.local.yaml `
+  --max-history-turns 4
+```
+
+`search`는 기본적으로 Source Metadata만 출력합니다. 로컬 Source 본문이 필요한
+경우에만 `--include-content`를 명시합니다. 기존 `python -m app.indexer`,
+`python -m app.document_indexer`, `python -m app.rag_service` 명령도 계속 사용할
+수 있습니다.
+
+## Phase 16: Hybrid Search와 선택적 Reranker
+
+기본 `semantic` 모드는 기존 벡터 검색 순위를 그대로 사용합니다. `hybrid` 모드는
+`top_k × candidate_multiplier`만큼 벡터 후보를 가져온 뒤 질문의 정확한 용어가
+파일명, 클래스, 메서드, Section, Sheet와 Source 본문에 나타나는 정도를 결합해
+최종 `top_k`를 선택합니다. 에러 코드, IO 이름과 C# 식별자를 찾을 때 유용합니다.
+
+```yaml
+search:
+  top_k: 5
+  mode: hybrid
+  candidate_multiplier: 4
+  semantic_weight: 0.7
+  lexical_weight: 0.3
+  reranker_model_path: null
+  reranker_weight: 0.5
+  reranker_device: null
+```
+
+설정 파일을 변경하지 않고 통합 CLI에서 일시적으로 활성화할 수도 있습니다.
+
+```powershell
+python -m app search "ALM_204 Vacuum Sensor" `
+  --config config\config.local.yaml `
+  --source-type all `
+  --search-mode hybrid `
+  --candidate-multiplier 4 `
+  --semantic-weight 0.7 `
+  --lexical-weight 0.3
+```
+
+선택적 reranker는 Sentence Transformers `CrossEncoder` 호환 모델을 로컬 폴더에
+반입한 경우에만 사용합니다. 모델 경로가 `null`이면 Cross-Encoder Runtime을
+로드하거나 추가 추론을 수행하지 않습니다.
+
+```powershell
+python -m app ask "Loader Vacuum 복구 절차는?" `
+  --config config\config.local.yaml `
+  --search-mode hybrid `
+  --reranker-model-path D:\OfflineAssets\models\reranker `
+  --reranker-weight 0.5 `
+  --reranker-device cpu
+```
+
+Embedding 모델과 마찬가지로 reranker는 `local_files_only=True`와
+`trust_remote_code=False`로 로드합니다. 모델 파일은 GitHub에 포함하지 않고 폐쇄망
+배포 자산으로만 관리합니다. Hybrid 또는 reranker가 적용된 결과에는 최종 Score와
+Semantic, Lexical, Reranker Score가 함께 표시됩니다.
+
+## Phase 17: 선택적 문서 OCR과 Excel Chart 추출
+
+폐쇄망에 설치한 Tesseract를 명시적으로 설정하면 텍스트가 거의 없는 PDF Page와
+PPTX 내부 이미지를 OCR합니다. XLSX는 Chart 제목, 축 제목, Series 이름과 참조
+범위를 검색 가능한 문서 Chunk에 추가합니다. 기본값은 비활성화이므로 기존 색인
+동작과 의존성은 바뀌지 않습니다.
+
+```yaml
+visual:
+  enabled: true
+  tesseract_path: D:/OfflineAssets/tools/tesseract/tesseract.exe
+  languages: kor+eng
+  timeout_seconds: 60
+  pdf_dpi: 200
+  pdf_ocr: true
+  pptx_image_ocr: true
+  xlsx_chart_extraction: true
+```
+
+스캔 PDF OCR에는 `requirements-vision.txt`의 PyMuPDF가 추가로 필요합니다.
+Tesseract 실행 파일과 `kor`, `eng` Language Data는 Repository에 넣지 않고 승인된
+오프라인 자산으로 반입합니다. 설정 변경 시 문서 Index Fingerprint가 달라져 다음
+색인에서 문서를 안전하게 재처리합니다.
+
+```powershell
+python -m pip install --no-index --find-links .\wheels -r requirements-vision.txt
+python -m app status --config config\config.local.yaml
+python -m app index --config config\config.local.yaml --source-type document
+```
+
+OCR은 이미지 속 글자만 추출하며 도면·사진의 의미를 설명하지 않습니다. Chart도
+시각적 추론이나 Excel 수식 재계산 없이 저장된 제목과 Data Reference만 추출합니다.
+
+## Phase 18: Context Orchestrator 연동용 Local API
+
+Python 표준 라이브러리 기반의 Read-only JSON API를 추가했습니다. 검색 API는 LLM을
+호출하지 않고 코드·문서 근거를 반환하며, 답변 API는 설정된 로컬 LLM을 이용해 근거
+기반 답변을 생성합니다.
+
+```powershell
+python -m app serve `
+  --config config\config.local.yaml `
+  --host 127.0.0.1 `
+  --port 8765
+
+Invoke-RestMethod http://127.0.0.1:8765/health
+```
+
+제공 Endpoint:
+
+- `GET /health`: 모델을 로드하지 않는 상태 확인
+- `POST /v1/retrieve`: LLM 없는 코드·문서 통합 근거 검색
+- `POST /v1/answer`: 로컬 LLM을 사용하는 근거 기반 답변
+
+기본적으로 다른 PC에서 접근할 수 없는 `127.0.0.1`에만 바인딩합니다. 원격 바인딩은
+`--allow-remote` 없이는 거부되며, API 자체에는 인증이나 TLS가 없으므로 사내 Network에
+직접 노출하지 않습니다. 요청 형식과 Filter는
+[`docs/LOCAL_API.md`](docs/LOCAL_API.md)를 참고합니다.
+
+## Phase 19: Retrieval 품질 평가
+
+질문별 기대 Source를 JSONL Dataset으로 정의하고 검색 품질을 반복 측정할 수 있습니다.
+평가는 LLM 답변을 생성하지 않고 `Hit@K`, `Recall@K`, `MRR`을 계산합니다.
+
+```powershell
+python -m app evaluate `
+  --config config\config.local.yaml `
+  --dataset D:\EquipmentData\evaluation\retrieval.jsonl `
+  --top-k 5 `
+  --min-hit-rate 0.90 `
+  --min-recall 0.80 `
+  --min-mrr 0.70 `
+  --output D:\EquipmentData\evaluation\results\latest.json
+```
+
+기준에 미달하면 Exit Code `1`을 반환하므로 폐쇄망 검증 Script에 연결할 수 있습니다.
+샘플은 [`examples/evaluation.sample.jsonl`](examples/evaluation.sample.jsonl), Dataset
+작성법과 Metric 설명은 [`docs/EVALUATION.md`](docs/EVALUATION.md)를 참고합니다.
+실제 설비 질문과 내부 File 이름이 포함된 Dataset은 GitHub에 올리지 않습니다.
+
+## Phase 20: 폐쇄망 Local UI
+
+별도 Web Framework 없이 기존 Local API가 정적 UI를 함께 제공합니다. Browser에서
+질문, 검색 대상, Top-K와 Metadata Filter를 입력하고 근거 기반 답변 또는 검색 근거만
+확인할 수 있습니다.
+
+```powershell
+python -m app serve `
+  --config config\config.local.yaml `
+  --host 127.0.0.1 `
+  --port 8765
+```
+
+실행 후 `http://127.0.0.1:8765/`을 엽니다. 외부 CDN, Font, JavaScript Package와
+원격 Image를 사용하지 않으며 화면 요청만으로 모델을 로드하지 않습니다. Source와
+LLM 답변은 HTML이 아닌 일반 Text로 표시합니다. 사용법과 보안 경계는
+[`docs/LOCAL_UI.md`](docs/LOCAL_UI.md)를 참고합니다.

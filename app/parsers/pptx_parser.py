@@ -10,6 +10,7 @@ from app.models.document_models import (
     DocumentSourceFile,
     NormalizedDocument,
 )
+from app.ocr.tesseract import OcrError, OcrProvider
 from app.parsers.document_parser import (
     DocumentParseError,
     build_normalized_document,
@@ -17,6 +18,9 @@ from app.parsers.document_parser import (
 
 
 class PptxDocumentParser:
+    def __init__(self, *, ocr: OcrProvider | None = None) -> None:
+        self._ocr = ocr
+
     def parse(self, source: DocumentSourceFile) -> NormalizedDocument:
         try:
             from pptx import Presentation
@@ -29,6 +33,8 @@ class PptxDocumentParser:
         try:
             presentation = Presentation(str(source.path))
             blocks, first_title = self._blocks(presentation, MSO_SHAPE_TYPE)
+        except DocumentParseError:
+            raise
         except Exception as exc:
             raise DocumentParseError(
                 f"Unable to parse PPTX: {source.path}"
@@ -62,6 +68,33 @@ class PptxDocumentParser:
             title_id = getattr(title_shape, "shape_id", None)
             for shape in _iter_shapes(slide.shapes, shape_types):
                 if getattr(shape, "shape_id", None) == title_id:
+                    continue
+                if self._ocr is not None and shape.shape_type == shape_types.PICTURE:
+                    try:
+                        text = self._ocr.recognize(
+                            shape.image.blob,
+                            extension=f".{shape.image.ext}",
+                        )
+                    except OcrError as exc:
+                        raise DocumentParseError(
+                            f"Unable to OCR PPTX image on slide {slide_number}"
+                        ) from exc
+                    if text.strip():
+                        blocks.append(
+                            DocumentBlock(
+                                "heading",
+                                "Image OCR",
+                                level=2,
+                                slide=slide_number,
+                            )
+                        )
+                        blocks.append(
+                            DocumentBlock(
+                                "paragraph",
+                                text,
+                                slide=slide_number,
+                            )
+                        )
                     continue
                 if getattr(shape, "has_table", False):
                     rows = _table_rows(shape.table)
