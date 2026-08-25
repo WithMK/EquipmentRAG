@@ -47,6 +47,11 @@ class EmbeddingConfig:
     batch_size: int
     device: str | None
     normalize_embeddings: bool
+    backend: str = "sentence_transformers"
+    base_url: str = "http://127.0.0.1:8081/v1"
+    model: str = "bge-m3"
+    dimension: int = 1024
+    request_timeout_seconds: int = 120
 
 
 @dataclass(frozen=True)
@@ -117,11 +122,27 @@ def _required_string(data: Mapping[str, Any], key: str, section_name: str) -> st
     return value.strip()
 
 
+def _string_with_default(
+    data: Mapping[str, Any], key: str, section_name: str, default: str
+) -> str:
+    if key not in data:
+        return default
+    return _required_string(data, key, section_name)
+
+
 def _positive_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
     value = data.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConfigError(f"'{section_name}.{key}' must be a positive integer")
     return value
+
+
+def _positive_int_with_default(
+    data: Mapping[str, Any], key: str, section_name: str, default: int
+) -> int:
+    if key not in data:
+        return default
+    return _positive_int(data, key, section_name)
 
 
 def _non_negative_int(data: Mapping[str, Any], key: str, section_name: str) -> int:
@@ -160,10 +181,7 @@ def _string_tuple(data: Mapping[str, Any], key: str, section_name: str) -> tuple
 
 
 def _path_tuple(
-    data: Mapping[str, Any],
-    key: str,
-    section_name: str,
-    project_root: Path,
+    data: Mapping[str, Any], key: str, section_name: str, project_root: Path
 ) -> tuple[Path, ...]:
     values = _string_tuple(data, key, section_name)
     return tuple(_resolve_path(value, project_root) for value in values)
@@ -180,21 +198,15 @@ def _resolve_path(raw_path: str, project_root: Path) -> Path:
 
 
 def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
-    """Load and validate a YAML configuration file.
-
-    Relative values in the YAML file are resolved from the project root, which
-    is assumed to be the parent directory of the configuration directory.
-    """
+    """Load and validate a YAML configuration file."""
 
     path = Path(config_path).expanduser().resolve(strict=False)
     if not path.is_file():
         raise ConfigError(f"Configuration file not found: {path}")
-
     try:
         parsed = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise ConfigError(f"Unable to read configuration: {path}") from exc
-
     if not isinstance(parsed, Mapping):
         raise ConfigError("Configuration root must be a mapping")
 
@@ -217,9 +229,7 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
 
     document_config: DocumentConfig | None = None
     if isinstance(document_data, Mapping):
-        document_chunk_size = _positive_int(
-            document_data, "chunk_size", "document"
-        )
+        document_chunk_size = _positive_int(document_data, "chunk_size", "document")
         document_chunk_overlap = _non_negative_int(
             document_data, "chunk_overlap", "document"
         )
@@ -234,30 +244,30 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
         document_config = DocumentConfig(
             enabled=_boolean(document_data, "enabled", "document"),
             source_paths=_path_tuple(
-                document_data,
-                "source_paths",
-                "document",
-                project_root,
+                document_data, "source_paths", "document", project_root
             ),
             extensions=tuple(value.casefold() for value in extensions),
             exclude_directories=_string_tuple(
-                document_data,
-                "exclude_directories",
-                "document",
+                document_data, "exclude_directories", "document"
             ),
             chunk_size=document_chunk_size,
             chunk_overlap=document_chunk_overlap,
             collection_name=_required_string(
-                document_data,
-                "collection_name",
-                "document",
+                document_data, "collection_name", "document"
             ),
+        )
+
+    embedding_backend = _string_with_default(
+        embedding, "backend", "embedding", "sentence_transformers"
+    ).lower()
+    if embedding_backend not in {"sentence_transformers", "llama_cpp"}:
+        raise ConfigError(
+            "'embedding.backend' must be 'sentence_transformers' or 'llama_cpp'"
         )
 
     provider = _required_string(llm, "provider", "llm").lower()
     if provider not in {"llama_cpp", "ollama"}:
         raise ConfigError("'llm.provider' must be 'llama_cpp' or 'ollama'")
-
     level = _required_string(logging_config, "level", "logging").upper()
     if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ConfigError("'logging.level' is invalid")
@@ -280,6 +290,20 @@ def load_config(config_path: str | Path = "config/config.yaml") -> AppConfig:
             device=_optional_string(embedding, "device", "embedding"),
             normalize_embeddings=_boolean(
                 embedding, "normalize_embeddings", "embedding"
+            ),
+            backend=embedding_backend,
+            base_url=_string_with_default(
+                embedding,
+                "base_url",
+                "embedding",
+                "http://127.0.0.1:8081/v1",
+            ).rstrip("/"),
+            model=_string_with_default(embedding, "model", "embedding", "bge-m3"),
+            dimension=_positive_int_with_default(
+                embedding, "dimension", "embedding", 1024
+            ),
+            request_timeout_seconds=_positive_int_with_default(
+                embedding, "request_timeout_seconds", "embedding", 120
             ),
         ),
         chromadb=ChromaConfig(
@@ -309,12 +333,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Validate EquipmentRAG configuration")
     parser.add_argument("--config", default="config/config.yaml", help="YAML configuration path")
     args = parser.parse_args()
-
     try:
         config = load_config(args.config)
     except ConfigError as exc:
         parser.error(str(exc))
-
     print(json.dumps(config.safe_summary(), ensure_ascii=False, indent=2))
     return 0
 

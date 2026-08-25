@@ -1,8 +1,8 @@
 equipment:
-  name: sample-equipment
+  name: replace-with-equipment-name
 
 source:
-  path: ./data/source
+  path: D:/EquipmentData/source
   include_extensions: [.cs]
   exclude_directories: [bin, obj, .git, .vs, Debug, Release, packages]
   chunk_size: 4000
@@ -10,7 +10,7 @@ source:
 
 document:
   enabled: false
-  source_paths: [./data/documents]
+  source_paths: [D:/EquipmentData/documents]
   extensions: [.docx, .pdf, .pptx, .xlsx, .md, .txt]
   exclude_directories: [.git, .vs, archive]
   chunk_size: 3000
@@ -18,14 +18,18 @@ document:
   collection_name: document_chunks
 
 embedding:
-  backend: sentence_transformers
-  model_path: ./models/bge-m3
+  backend: llama_cpp
+  model_path: D:/OfflineAssets/models/embedding/bge-m3-Q4_0.gguf
+  base_url: http://127.0.0.1:8081/v1
+  model: bge-m3-q4
+  dimension: 1024
+  request_timeout_seconds: 120
   batch_size: 16
   device: null
   normalize_embeddings: true
 
 chromadb:
-  path: ./data/chroma
+  path: D:/OfflineRuntime/EquipmentRAG/chroma-gguf-q4
   collection_name: equipment_code
 
 search:
@@ -39,4 +43,4 @@ llm:
 
 logging:
   level: INFO
-  path: ./logs/equipment_rag.log
+  path: D:/OfflineRuntime/EquipmentRAG/logs/equipment_rag.log

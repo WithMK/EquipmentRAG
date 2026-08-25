@@ -36,6 +36,7 @@ document:
   collection_name: document_chunks
 
 embedding:
+  backend: sentence_transformers
   model_path: D:/OfflineAssets/models/embedding/bge-m3
   batch_size: 16
   device: null
