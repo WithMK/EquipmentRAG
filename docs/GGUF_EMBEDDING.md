@@ -26,6 +26,23 @@ llama-server.exe `
 
 The existing Qwen chat server may continue on port `8080`.
 
+On Android/Termux, grant shared-storage access once with
+`termux-setup-storage`, then use the Termux-built `llama-server`. Start with
+CPU inference; add GPU-offload options only if that build supports them:
+
+```bash
+./llama-server \
+  -m /storage/emulated/0/Download/bge-m3-Q4_0.gguf \
+  --embedding \
+  --pooling cls \
+  --embd-normalize 2 \
+  -c 8192 \
+  -b 512 \
+  -ub 256 \
+  --host 127.0.0.1 \
+  --port 8081
+```
+
 ## Configure EquipmentRAG
 
 Copy `config/config.gguf.example.yaml` to the ignored local configuration and
