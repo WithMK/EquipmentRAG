@@ -59,10 +59,11 @@ class RecordingTransport:
     ) -> bytes:
         payload = json.loads(body.decode("utf-8"))
         self.calls.append((url, payload, headers, timeout))
-        rows = []
-        for index, _ in enumerate(payload["input"]):
-            rows.append({"index": index, "embedding": [index + 1, 2, 3, 4]})
-        return json.dumps({"object": "list", "data": rows}).encode("utf-8")
+        data = [
+            {"index": index, "embedding": [index + 1, 2, 3, 4]}
+            for index, _ in enumerate(payload["input"])
+        ]
+        return json.dumps({"object": "list", "data": data}).encode("utf-8")
 
 
 class EmbeddingServiceTests(unittest.TestCase):
@@ -93,11 +94,13 @@ class EmbeddingServiceTests(unittest.TestCase):
             model_path.mkdir()
             factory = FakeSentenceTransformerFactory()
             fake_module = types.SimpleNamespace(SentenceTransformer=factory)
+
             with patch.dict(sys.modules, {"sentence_transformers": fake_module}):
                 service = LocalEmbeddingService(self._config(model_path))
                 documents = service.embed_documents(["class A", "class B"])
                 query = service.embed_query("A 클래스")
                 generic = service.embed_texts(["plain text"])
+
             self.assertTrue(service.is_loaded)
             self.assertEqual(service.dimension, 3)
             self.assertEqual(documents, [[4.0, 5.0, 6.0], [4.0, 5.0, 6.0]])
@@ -125,19 +128,23 @@ class EmbeddingServiceTests(unittest.TestCase):
             service = LocalEmbeddingService(
                 self._gguf_config(model_path), transport=transport
             )
-            rows = service.embed_documents(["a", "b", "c"])
+
+            documents = service.embed_documents(["a", "b", "c"])
             query = service.embed_query("query")
 
-        self.assertTrue(service.is_loaded)
-        self.assertEqual(service.dimension, 4)
-        self.assertEqual(len(rows), 3)
-        self.assertEqual(query, [1.0, 2.0, 3.0, 4.0])
-        self.assertEqual(len(transport.calls), 3)
-        first_url, first_payload, first_headers, first_timeout = transport.calls[0]
-        self.assertEqual(first_url, "http://127.0.0.1:8081/v1/embeddings")
-        self.assertEqual(first_payload, {"model": "bge-m3-q4", "input": ["a", "b"]})
-        self.assertEqual(first_headers["Content-Type"], "application/json")
-        self.assertEqual(first_timeout, 45.0)
+            self.assertTrue(service.is_loaded)
+            self.assertEqual(service.dimension, 4)
+            self.assertEqual(len(documents), 3)
+            self.assertEqual(query, [1.0, 2.0, 3.0, 4.0])
+            self.assertEqual(len(transport.calls), 3)
+            first_url, first_payload, first_headers, first_timeout = transport.calls[0]
+            self.assertEqual(first_url, "http://127.0.0.1:8081/v1/embeddings")
+            self.assertEqual(
+                first_payload,
+                {"model": "bge-m3-q4", "input": ["a", "b"]},
+            )
+            self.assertEqual(first_headers["Content-Type"], "application/json")
+            self.assertEqual(first_timeout, 45.0)
 
     def test_llama_cpp_backend_rejects_wrong_vector_dimension(self) -> None:
         def wrong_dimension(
@@ -153,19 +160,31 @@ class EmbeddingServiceTests(unittest.TestCase):
             service = LocalEmbeddingService(
                 self._gguf_config(model_path), transport=wrong_dimension
             )
+
             with self.assertRaisesRegex(EmbeddingError, "vector shape"):
                 service.embed_query("query")
 
-    def test_rejects_missing_model_path_for_each_backend(self) -> None:
-        missing = Path("missing-model")
+    def test_rejects_missing_model_directory_without_importing_runtime(self) -> None:
+        missing = Path("missing-model-directory")
+        service = LocalEmbeddingService(self._config(missing))
+
         with self.assertRaisesRegex(EmbeddingError, "directory not found"):
-            LocalEmbeddingService(self._config(missing)).load()
+            service.load()
+
+        self.assertFalse(service.is_loaded)
+
+    def test_rejects_missing_gguf_model_file(self) -> None:
+        service = LocalEmbeddingService(self._gguf_config(Path("missing-model.gguf")))
+
         with self.assertRaisesRegex(EmbeddingError, "GGUF.*file not found"):
-            LocalEmbeddingService(self._gguf_config(missing)).load()
+            service.load()
+
+        self.assertFalse(service.is_loaded)
 
     def test_rejects_empty_or_blank_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = LocalEmbeddingService(self._config(Path(temp_dir)))
+
             with self.assertRaisesRegex(EmbeddingError, "non-empty strings"):
                 service.embed_texts([])
             with self.assertRaisesRegex(EmbeddingError, "non-empty strings"):
