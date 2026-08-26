@@ -37,7 +37,9 @@ from app.retrieval.document_retriever import (
     DocumentSearchFilters,
     DocumentSearchResult,
 )
+from app.retrieval.sqlite_fts import LexicalSearchResult
 from app.search import CodeSearchFilters, CodeSearchResult, SearchError
+from app.vectorstore.chroma_store import ChunkMetadata
 
 
 def _config(root: Path, provider: str = "llama_cpp") -> AppConfig:
@@ -181,6 +183,44 @@ class FakeDocumentSearch:
         top_k: int | None = None,
         filters: DocumentSearchFilters | None = None,
     ) -> list[DocumentSearchResult]:
+        self.calls.append((query, top_k, filters))
+        return self.results
+
+
+class FakeExactSearch(FakeSearch):
+    def __init__(
+        self,
+        results: list[CodeSearchResult],
+        exact_results: list[CodeSearchResult],
+    ) -> None:
+        super().__init__(results)
+        self.exact_results = exact_results
+        self.exact_calls: list[tuple[str, tuple[str, ...], int]] = []
+
+    def search_exact(
+        self,
+        query: str,
+        terms: tuple[str, ...],
+        *,
+        top_k: int,
+        filters: CodeSearchFilters | None = None,
+    ) -> list[CodeSearchResult]:
+        self.exact_calls.append((query, tuple(terms), top_k))
+        return self.exact_results
+
+
+class FakeLexicalStore:
+    def __init__(self, results: list[LexicalSearchResult]) -> None:
+        self.results = results
+        self.calls: list[tuple[str, int, dict[str, object] | None]] = []
+
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        filters: dict[str, object] | None = None,
+    ) -> list[LexicalSearchResult]:
         self.calls.append((query, top_k, filters))
         return self.results
 
@@ -597,6 +637,73 @@ class RagServiceTests(unittest.TestCase):
         self.assertIsNotNone(sources[0].semantic_score)
         self.assertEqual(sources[0].lexical_score, 1.0)
         self.assertGreater(sources[0].score, sources[1].score)
+
+    def test_persistent_hybrid_fuses_independent_exact_and_fts_results(self) -> None:
+        config = replace(
+            _config(self.root),
+            search=SearchConfig(
+                top_k=2,
+                mode="hybrid",
+                candidate_multiplier=2,
+                semantic_weight=0.5,
+                lexical_weight=0.5,
+                lexical_backend="sqlite_fts5",
+                lexical_path=self.root / "lexical.sqlite3",
+                rrf_k=10,
+            ),
+        )
+        exact = _result(
+            2,
+            "ResetE024",
+            'if (alarm.Code == "E-024") alarm.Reset();',
+        )
+        search = FakeExactSearch(
+            [_result(1, "GenericHandler", "Handle generic alarm state.")],
+            [exact],
+        )
+        lexical = FakeLexicalStore(
+            [
+                LexicalSearchResult(
+                    id=exact.id,
+                    document=exact.code,
+                    score=1.0,
+                    metadata=ChunkMetadata(
+                        equipment="press-line-01",
+                        repository="control",
+                        project="Equipment.Control",
+                        file_name=exact.file_name,
+                        file_path=exact.file_path,
+                        relative_path=exact.relative_path,
+                        class_name=exact.class_name,
+                        method_name=exact.method_name,
+                        chunk_index=exact.chunk_index,
+                        start_line=exact.start_line,
+                        end_line=exact.end_line,
+                        file_hash=exact.file_hash,
+                        modified_time=exact.modified_time,
+                    ),
+                )
+            ]
+        )
+        service = RagService(
+            config,
+            search=search,
+            lexical_store=lexical,
+            llm_client=self.llm,
+        )
+
+        sources = service.retrieve("E-024 reset", top_k=2)
+
+        self.assertEqual(sources[0].record_id, exact.id)
+        self.assertIsNotNone(sources[0].exact_score)
+        self.assertIsNotNone(sources[0].lexical_score)
+        self.assertIsNone(sources[0].semantic_score)
+        self.assertEqual(search.exact_calls, [("E-024 reset", ("E-024",), 4)])
+        self.assertEqual(lexical.calls[0][1], 4)
+        self.assertEqual(
+            lexical.calls[0][2],
+            {"equipment": "press-line-01", "source_type": "code"},
+        )
 
     def test_optional_reranker_reorders_expanded_candidates(self) -> None:
         config = replace(

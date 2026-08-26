@@ -77,6 +77,10 @@ class SearchConfig:
     reranker_model_path: Path | None = None
     reranker_weight: float = 0.5
     reranker_device: str | None = None
+    exact_match_enabled: bool = True
+    lexical_backend: str = "candidate"
+    lexical_path: Path | None = None
+    rrf_k: int = 60
 
 
 @dataclass(frozen=True)
@@ -390,6 +394,26 @@ def _build_search_config(
             "'search.reranker_model_path' must be a non-empty string or null"
         )
     reranker_device = _optional_string(search, "reranker_device", "search")
+    exact_match_enabled = search.get("exact_match_enabled", True)
+    if not isinstance(exact_match_enabled, bool):
+        raise ConfigError("'search.exact_match_enabled' must be a boolean")
+    lexical_backend = search.get("lexical_backend", "candidate")
+    if not isinstance(lexical_backend, str) or lexical_backend.strip().lower() not in {
+        "candidate",
+        "sqlite_fts5",
+    }:
+        raise ConfigError(
+            "'search.lexical_backend' must be 'candidate' or 'sqlite_fts5'"
+        )
+    lexical_path_value = search.get("lexical_path")
+    if lexical_path_value is not None and (
+        not isinstance(lexical_path_value, str) or not lexical_path_value.strip()
+    ):
+        raise ConfigError("'search.lexical_path' must be a non-empty string or null")
+    if lexical_backend.strip().lower() == "sqlite_fts5" and lexical_path_value is None:
+        raise ConfigError(
+            "'search.lexical_path' is required for the sqlite_fts5 backend"
+        )
     return SearchConfig(
         top_k=_positive_int(search, "top_k", "search"),
         mode=mode_value.strip().lower(),
@@ -413,6 +437,14 @@ def _build_search_config(
             0.5,
         ),
         reranker_device=reranker_device,
+        exact_match_enabled=exact_match_enabled,
+        lexical_backend=lexical_backend.strip().lower(),
+        lexical_path=(
+            _resolve_path(lexical_path_value, project_root)
+            if isinstance(lexical_path_value, str)
+            else None
+        ),
+        rrf_k=_optional_positive_int(search, "rrf_k", "search", 60),
     )
 
 

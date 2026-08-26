@@ -130,6 +130,10 @@ class ConfigTests(unittest.TestCase):
   candidate_multiplier: 6
   semantic_weight: 0.4
   lexical_weight: 0.6
+  exact_match_enabled: true
+  lexical_backend: sqlite_fts5
+  lexical_path: ./data/search/lexical.sqlite3
+  rrf_k: 40
   reranker_model_path: ./models/reranker
   reranker_weight: 0.7
   reranker_device: cpu""",
@@ -143,6 +147,13 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(config.search.candidate_multiplier, 6)
             self.assertEqual(config.search.semantic_weight, 0.4)
             self.assertEqual(config.search.lexical_weight, 0.6)
+            self.assertTrue(config.search.exact_match_enabled)
+            self.assertEqual(config.search.lexical_backend, "sqlite_fts5")
+            self.assertEqual(
+                config.search.lexical_path,
+                (root / "data/search/lexical.sqlite3").resolve(),
+            )
+            self.assertEqual(config.search.rrf_k, 40)
             self.assertEqual(
                 config.search.reranker_model_path,
                 (root / "models/reranker").resolve(),
@@ -168,6 +179,21 @@ class ConfigTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ConfigError, "cannot both be zero"):
+                load_config(config_path)
+
+    def test_sqlite_fts_backend_requires_a_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                VALID_CONFIG.replace(
+                    "search:\n  top_k: 3",
+                    "search:\n  top_k: 3\n  lexical_backend: sqlite_fts5",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ConfigError, "lexical_path.*required"):
                 load_config(config_path)
 
     def test_loads_optional_document_configuration(self) -> None:

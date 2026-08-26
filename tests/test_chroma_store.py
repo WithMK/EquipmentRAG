@@ -102,6 +102,13 @@ class ChromaStoreTests(unittest.TestCase):
         self.assertEqual(results[0].metadata.language, "csharp")
         self.assertEqual(results[0].metadata.start_line, 10)
         self.assertEqual(results[0].metadata.end_line, 20)
+        exact_results = store.search(
+            [0.0, 1.0, 0.0],
+            5,
+            where={"equipment": "test-equipment"},
+            where_document={"$contains": "ResetPressAlarm"},
+        )
+        self.assertEqual([result.id for result in exact_results], ["press-reset"])
 
         store.upsert(
             [

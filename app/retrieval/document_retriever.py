@@ -34,6 +34,7 @@ class DocumentVectorSearchProvider(Protocol):
         top_k: int,
         *,
         where: Mapping[str, Any] | None = None,
+        where_document: Mapping[str, Any] | None = None,
     ) -> list[SearchResult]: ...
 
 
@@ -182,6 +183,51 @@ class DocumentRetriever:
         return [
             self._to_result(rank, match)
             for rank, match in enumerate(matches, start=1)
+        ]
+
+    def search_exact(
+        self,
+        query: str,
+        terms: Sequence[str],
+        *,
+        top_k: int,
+        filters: DocumentSearchFilters | None = None,
+    ) -> list[DocumentSearchResult]:
+        if not isinstance(query, str) or not query.strip():
+            raise DocumentRetrievalError("query must be a non-empty string")
+        if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
+            raise DocumentRetrievalError("top_k must be a positive integer")
+        if (
+            isinstance(terms, (str, bytes))
+            or not isinstance(terms, Sequence)
+            or not terms
+            or any(not isinstance(term, str) or not term.strip() for term in terms)
+        ):
+            raise DocumentRetrievalError("terms must contain non-empty strings")
+        effective_filters = filters or DocumentSearchFilters(
+            equipment=self._config.equipment.name
+        )
+        try:
+            query_embedding = self._embedding.embed_query(query.strip())
+            matches: dict[str, SearchResult] = {}
+            for term in terms:
+                for match in self._get_vector_store().search(
+                    query_embedding,
+                    top_k,
+                    where=effective_filters.to_chroma(),
+                    where_document={"$contains": term},
+                ):
+                    existing = matches.get(match.id)
+                    if existing is None or match.distance < existing.distance:
+                        matches[match.id] = match
+        except (EmbeddingError, VectorStoreError) as exc:
+            raise DocumentRetrievalError(str(exc)) from exc
+        except Exception as exc:
+            raise DocumentRetrievalError("Exact document search failed") from exc
+        ordered = sorted(matches.values(), key=lambda item: item.distance)[:top_k]
+        return [
+            self._to_result(rank, match)
+            for rank, match in enumerate(ordered, 1)
         ]
 
     def _get_vector_store(self) -> DocumentVectorSearchProvider:

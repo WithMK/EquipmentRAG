@@ -494,10 +494,17 @@ python -m app chat `
 
 ## Phase 16: Hybrid Search와 선택적 Reranker
 
-기본 `semantic` 모드는 기존 벡터 검색 순위를 그대로 사용합니다. `hybrid` 모드는
-`top_k × candidate_multiplier`만큼 벡터 후보를 가져온 뒤 질문의 정확한 용어가
-파일명, 클래스, 메서드, Section, Sheet와 Source 본문에 나타나는 정도를 결합해
-최종 `top_k`를 선택합니다. 에러 코드, IO 이름과 C# 식별자를 찾을 때 유용합니다.
+기본 `semantic` 모드는 기존 벡터 검색 순위를 그대로 사용합니다. `hybrid` 모드에서
+`sqlite_fts5` Backend를 선택하면 다음 세 검색 채널을 서로 독립적으로 실행한 뒤
+RRF(Reciprocal Rank Fusion)로 병합합니다.
+
+1. ChromaDB Semantic Search
+2. ChromaDB `where_document.$contains` Exact Match Search
+3. 영속 SQLite FTS5 BM25 Search
+
+따라서 Semantic 후보 밖의 에러 코드, IO 이름, 파일·클래스·메서드명도 최종 결과에
+진입할 수 있습니다. 기존 방식이 필요한 경우 `lexical_backend: candidate`를 사용하면
+Semantic 후보 안에서만 용어 점수를 계산합니다.
 
 ```yaml
 search:
@@ -506,10 +513,30 @@ search:
   candidate_multiplier: 4
   semantic_weight: 0.7
   lexical_weight: 0.3
+  exact_match_enabled: true
+  lexical_backend: sqlite_fts5
+  lexical_path: ./data/lexical/equipment_fts.db
+  rrf_k: 60
   reranker_model_path: null
   reranker_weight: 0.5
   reranker_device: null
 ```
+
+SQLite FTS5 Index는 별도 서버나 `rank_bm25` 메모리 재구축 없이 코드·문서 증분
+색인과 함께 동일하게 추가·교체·삭제됩니다. 기존 설치에서 처음 활성화하면 Search
+설정 Fingerprint 변경을 감지해 전체 Chunk를 한 번 재색인합니다. 명시적으로 실행할
+때는 다음 명령을 사용합니다.
+
+```powershell
+python -m app index `
+  --config config\config.local.yaml `
+  --source-type all `
+  --full
+```
+
+`python -m app status`의 `Lexical` 항목에서 FTS 파일 준비 여부를 확인할 수 있습니다.
+SQLite FTS5는 CPython에 포함된 SQLite 기능을 사용하므로 별도 Python 검색
+라이브러리는 필요하지 않습니다.
 
 설정 파일을 변경하지 않고 통합 CLI에서 일시적으로 활성화할 수도 있습니다.
 

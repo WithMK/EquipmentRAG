@@ -14,6 +14,7 @@ from app.config import AppConfig, ConfigError, load_config
 from app.embedding.embedding_service import LocalEmbeddingService
 from app.llm.base import ChatMessage, LlmClient, LlmError, LlmResponse, LlmUsage
 from app.llm.factory import create_llm_client
+from app.models.document_models import DocumentChunkMetadata
 from app.retrieval.document_retriever import (
     DocumentRetrievalError,
     DocumentRetriever,
@@ -21,12 +22,19 @@ from app.retrieval.document_retriever import (
     DocumentSearchResult,
 )
 from app.retrieval.reranker import LocalCrossEncoderReranker, RerankerError
+from app.retrieval.sqlite_fts import (
+    LexicalSearchResult,
+    LexicalStoreError,
+    SQLiteFtsStore,
+    metadata_filters,
+)
 from app.search import (
     CodeSearchFilters,
     CodeSearchResult,
     SearchError,
     SemanticCodeSearch,
 )
+from app.vectorstore.chroma_store import ChunkMetadata
 
 
 SYSTEM_PROMPT = """당신은 C# 설비 제어 소프트웨어 분석 도우미입니다.
@@ -99,6 +107,16 @@ class RerankerProvider(Protocol):
     def score(self, query: str, documents: Sequence[str]) -> list[float]: ...
 
 
+class LexicalSearchProvider(Protocol):
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        *,
+        filters: dict[str, object] | None = None,
+    ) -> list[LexicalSearchResult]: ...
+
+
 @dataclass(frozen=True)
 class UnifiedSearchFilters:
     """Independent metadata filters for a mixed code and document query."""
@@ -135,6 +153,7 @@ class RagSource:
     semantic_score: float | None = None
     lexical_score: float | None = None
     reranker_score: float | None = None
+    exact_score: float | None = None
 
     @classmethod
     def from_search_result(
@@ -233,6 +252,7 @@ class RagService:
         code_search: CodeSearchProvider | None = None,
         document_search: DocumentSearchProvider | None = None,
         reranker: RerankerProvider | None = None,
+        lexical_store: LexicalSearchProvider | None = None,
         llm_client: LlmClient | None = None,
         source_type: str = "code",
     ) -> None:
@@ -244,6 +264,13 @@ class RagService:
         self._code_search: CodeSearchProvider | None = None
         self._document_search: DocumentSearchProvider | None = None
         self._reranker = reranker
+        self._lexical_store = lexical_store
+        if (
+            self._lexical_store is None
+            and config.search.lexical_backend == "sqlite_fts5"
+            and config.search.lexical_path is not None
+        ):
+            self._lexical_store = SQLiteFtsStore(config.search.lexical_path)
         if self._reranker is None and config.search.reranker_model_path is not None:
             self._reranker = LocalCrossEncoderReranker(
                 config.search.reranker_model_path,
@@ -394,7 +421,18 @@ class RagService:
                     filters=filters,
                 )
                 sources = tuple(self._to_source(match) for match in matches)
-            if use_extended_candidates:
+            if (
+                self._config.search.mode == "hybrid"
+                and self._config.search.lexical_backend == "sqlite_fts5"
+            ):
+                sources = self._persistent_hybrid_sources(
+                    normalized_query,
+                    sources,
+                    limit=limit,
+                    candidate_limit=candidate_limit,
+                    filters=filters,
+                )
+            elif use_extended_candidates:
                 sources = _rerank_sources(
                     normalized_query,
                     sources,
@@ -406,13 +444,127 @@ class RagService:
                     reranker_weight=self._config.search.reranker_weight,
                     mixed=self._source_type == "all",
                 )
-        except (SearchError, DocumentRetrievalError, RerankerError) as exc:
+        except (
+            SearchError,
+            DocumentRetrievalError,
+            RerankerError,
+            LexicalStoreError,
+        ) as exc:
             raise RagError(str(exc)) from exc
         except RagError:
             raise
         except Exception as exc:
             raise RagError(f"Semantic {self._source_type} retrieval failed") from exc
         return sources
+
+    def _persistent_hybrid_sources(
+        self,
+        query: str,
+        semantic_sources: Sequence[RagSource],
+        *,
+        limit: int,
+        candidate_limit: int,
+        filters: CodeSearchFilters | DocumentSearchFilters | UnifiedSearchFilters | None,
+    ) -> tuple[RagSource, ...]:
+        if self._lexical_store is None:
+            raise RagError("SQLite FTS5 lexical search is not configured")
+        lexical_sources = self._search_lexical(query, candidate_limit, filters)
+        exact_sources = self._search_exact(query, candidate_limit, filters)
+        fused = _rrf_fuse(
+            semantic_sources,
+            exact_sources,
+            lexical_sources,
+            semantic_weight=self._config.search.semantic_weight,
+            lexical_weight=self._config.search.lexical_weight,
+            rrf_k=self._config.search.rrf_k,
+            mixed=self._source_type == "all",
+        )
+        if self._reranker is not None and fused:
+            fused = _rerank_fused(
+                query,
+                fused,
+                self._reranker,
+                self._config.search.reranker_weight,
+                mixed=self._source_type == "all",
+            )
+        return fused[:limit]
+
+    def _search_lexical(
+        self,
+        query: str,
+        limit: int,
+        filters: CodeSearchFilters | DocumentSearchFilters | UnifiedSearchFilters | None,
+    ) -> tuple[RagSource, ...]:
+        if self._source_type == "all":
+            if filters is not None and not isinstance(filters, UnifiedSearchFilters):
+                raise RagError("all mode filters must be UnifiedSearchFilters")
+            unified = filters or UnifiedSearchFilters()
+            code_filter = unified.code or CodeSearchFilters(
+                equipment=self._config.equipment.name
+            )
+            document_filter = unified.document or DocumentSearchFilters(
+                equipment=self._config.equipment.name
+            )
+            matches = [
+                *self._lexical_store.search(
+                    query,
+                    limit,
+                    filters=metadata_filters(code_filter, source_type="code"),
+                ),
+                *self._lexical_store.search(
+                    query,
+                    limit,
+                    filters=metadata_filters(document_filter, source_type="document"),
+                ),
+            ]
+        else:
+            effective = filters
+            if effective is None:
+                effective = (
+                    DocumentSearchFilters(equipment=self._config.equipment.name)
+                    if self._source_type == "document"
+                    else CodeSearchFilters(equipment=self._config.equipment.name)
+                )
+            matches = self._lexical_store.search(
+                query,
+                limit,
+                filters=metadata_filters(effective, source_type=self._source_type),
+            )
+        return tuple(_source_from_lexical(match) for match in matches)
+
+    def _search_exact(
+        self,
+        query: str,
+        limit: int,
+        filters: CodeSearchFilters | DocumentSearchFilters | UnifiedSearchFilters | None,
+    ) -> tuple[RagSource, ...]:
+        if not self._config.search.exact_match_enabled:
+            return ()
+        terms = _exact_terms(query)
+        if not terms:
+            return ()
+        if self._source_type == "all":
+            if filters is not None and not isinstance(filters, UnifiedSearchFilters):
+                raise RagError("all mode filters must be UnifiedSearchFilters")
+            unified = filters or UnifiedSearchFilters()
+            matches: list[CodeSearchResult | DocumentSearchResult] = []
+            for provider, provider_filters in (
+                (self._code_search, unified.code),
+                (self._document_search, unified.document),
+            ):
+                method = getattr(provider, "search_exact", None)
+                if callable(method):
+                    matches.extend(
+                        method(query, terms, top_k=limit, filters=provider_filters)
+                    )
+        else:
+            method = getattr(self._search, "search_exact", None)
+            matches = (
+                list(method(query, terms, top_k=limit, filters=filters))
+                if callable(method)
+                else []
+            )
+        return tuple(self._to_source(match) for match in matches)
 
     def _retrieve_all(
         self,
@@ -588,6 +740,165 @@ def _normalize_source_scores(sources: Sequence[RagSource]) -> list[float]:
     if highest == lowest:
         return [1.0 / rank for rank in range(1, len(scores) + 1)]
     return [(score - lowest) / (highest - lowest) for score in scores]
+
+
+def _source_from_lexical(match: LexicalSearchResult) -> RagSource:
+    metadata = match.metadata
+    if isinstance(metadata, DocumentChunkMetadata):
+        return RagSource(
+            source_id="",
+            record_id=match.id,
+            score=match.score,
+            file_name=metadata.file_name,
+            relative_path=metadata.source_path,
+            file_path=metadata.source_path,
+            class_name="",
+            method_name="",
+            start_line=0,
+            end_line=0,
+            code=match.document,
+            source_type="document",
+            document_type=metadata.document_type,
+            revision=metadata.revision,
+            document_status=metadata.document_status,
+            section=metadata.section,
+            subsection=metadata.subsection,
+            page=metadata.page,
+            slide=metadata.slide,
+            sheet=metadata.sheet,
+            cell_range=metadata.cell_range,
+        )
+    if isinstance(metadata, ChunkMetadata):
+        return RagSource(
+            source_id="",
+            record_id=match.id,
+            score=match.score,
+            file_name=metadata.file_name,
+            relative_path=metadata.relative_path,
+            file_path=metadata.file_path,
+            class_name=metadata.class_name,
+            method_name=metadata.method_name,
+            start_line=metadata.start_line,
+            end_line=metadata.end_line,
+            code=match.document,
+        )
+    raise RagError("Lexical index returned unsupported metadata")
+
+
+def _rrf_fuse(
+    semantic: Sequence[RagSource],
+    exact: Sequence[RagSource],
+    lexical: Sequence[RagSource],
+    *,
+    semantic_weight: float,
+    lexical_weight: float,
+    rrf_k: int,
+    mixed: bool,
+) -> tuple[RagSource, ...]:
+    by_id: dict[str, RagSource] = {}
+    scores: dict[str, float] = {}
+    semantic_scores: dict[str, float] = {}
+    exact_scores: dict[str, float] = {}
+    lexical_scores: dict[str, float] = {}
+    lists = (
+        (semantic, semantic_weight, semantic_scores),
+        (exact, 1.0, exact_scores),
+        (lexical, lexical_weight, lexical_scores),
+    )
+    for sources, weight, channel_scores in lists:
+        if weight <= 0:
+            continue
+        seen: set[str] = set()
+        for rank, source in enumerate(sources, 1):
+            if source.record_id in seen:
+                continue
+            seen.add(source.record_id)
+            by_id.setdefault(source.record_id, source)
+            channel_scores[source.record_id] = source.score
+            scores[source.record_id] = scores.get(source.record_id, 0.0) + (
+                weight / (rrf_k + rank)
+            )
+    ordered = sorted(by_id.values(), key=lambda item: scores[item.record_id], reverse=True)
+    output: list[RagSource] = []
+    code_rank = 0
+    document_rank = 0
+    for rank, source in enumerate(ordered, 1):
+        if mixed and source.source_type == "document":
+            document_rank += 1
+            source_id = f"D{document_rank}"
+        elif mixed:
+            code_rank += 1
+            source_id = f"C{code_rank}"
+        else:
+            source_id = f"S{rank}"
+        output.append(
+            replace(
+                source,
+                source_id=source_id,
+                score=scores[source.record_id],
+                semantic_score=semantic_scores.get(source.record_id),
+                exact_score=exact_scores.get(source.record_id),
+                lexical_score=lexical_scores.get(source.record_id),
+            )
+        )
+    return tuple(output)
+
+
+def _rerank_fused(
+    query: str,
+    sources: Sequence[RagSource],
+    reranker: RerankerProvider,
+    reranker_weight: float,
+    *,
+    mixed: bool,
+) -> tuple[RagSource, ...]:
+    raw = reranker.score(query, [_reranker_document(source) for source in sources])
+    if len(raw) != len(sources):
+        raise RerankerError("Reranker returned an unexpected score count")
+    reranked = _normalize_numeric_scores(raw)
+    base = _normalize_numeric_scores([source.score for source in sources])
+    ranked = sorted(
+        zip(sources, base, reranked),
+        key=lambda item: (1.0 - reranker_weight) * item[1] + reranker_weight * item[2],
+        reverse=True,
+    )
+    output: list[RagSource] = []
+    code_rank = 0
+    document_rank = 0
+    for rank, (source, base_score, reranker_score) in enumerate(ranked, 1):
+        final_score = (1.0 - reranker_weight) * base_score + reranker_weight * reranker_score
+        if mixed and source.source_type == "document":
+            document_rank += 1
+            source_id = f"D{document_rank}"
+        elif mixed:
+            code_rank += 1
+            source_id = f"C{code_rank}"
+        else:
+            source_id = f"S{rank}"
+        output.append(
+            replace(
+                source,
+                source_id=source_id,
+                score=final_score,
+                reranker_score=reranker_score,
+            )
+        )
+    return tuple(output)
+
+
+def _exact_terms(query: str) -> tuple[str, ...]:
+    patterns = (
+        r"\b[A-Za-z]+[-.][A-Za-z0-9_.-]*\d[A-Za-z0-9_.-]*\b",
+        r"\b[A-Z][A-Z0-9_]*\d[A-Z0-9_]*\b",
+        r"\b(?:[A-Z][a-z0-9]+){2,}[A-Za-z0-9]*\b",
+    )
+    values: list[str] = []
+    for pattern in patterns:
+        for value in re.findall(pattern, query):
+            cleaned = value.strip(".,:;()[]{}")
+            if len(cleaned) >= 3 and cleaned not in values:
+                values.append(cleaned)
+    return tuple(values[:8])
 
 
 def _rerank_sources(
