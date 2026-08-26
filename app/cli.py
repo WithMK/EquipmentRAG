@@ -83,6 +83,18 @@ def build_status(config: AppConfig) -> dict[str, object]:
             "candidate_multiplier": config.search.candidate_multiplier,
             "semantic_weight": config.search.semantic_weight,
             "lexical_weight": config.search.lexical_weight,
+            "exact_match_enabled": config.search.exact_match_enabled,
+            "lexical_backend": config.search.lexical_backend,
+            "lexical_path": (
+                str(config.search.lexical_path)
+                if config.search.lexical_path is not None
+                else None
+            ),
+            "lexical_ready": bool(
+                config.search.lexical_path
+                and config.search.lexical_path.is_file()
+            ),
+            "rrf_k": config.search.rrf_k,
             "reranker_model_path": (
                 str(config.search.reranker_model_path)
                 if config.search.reranker_model_path
@@ -208,6 +220,15 @@ def format_status(status: dict[str, object]) -> str:
             (
                 f"Search: {search['mode']} "
                 f"(top_k={search['top_k']}, candidates=x{search['candidate_multiplier']})"
+            ),
+            (
+                f"Lexical: {search['lexical_backend']} "
+                + (
+                    f"({'ready' if search['lexical_ready'] else 'missing'}, "
+                    f"{search['lexical_path']}, rrf_k={search['rrf_k']})"
+                    if search["lexical_path"] is not None
+                    else "(candidate reranking)"
+                )
             ),
             (
                 "Reranker: "
