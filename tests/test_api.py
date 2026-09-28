@@ -26,6 +26,7 @@ from app.config import (
     SearchConfig,
     SourceConfig,
 )
+from app.llm.base import ChatMessage
 from app.rag_service import RagAnswer, RagSource, UnifiedSearchFilters
 
 
@@ -185,6 +186,62 @@ class ApiApplicationTests(unittest.TestCase):
         _, kwargs = self.services["code"].ask_calls[0]
         self.assertEqual(kwargs["temperature"], 0.2)
         self.assertEqual(kwargs["max_tokens"], 256)
+
+    def test_answer_passes_conversation_and_resolved_retrieval_query(self) -> None:
+        status, _ = self.application.dispatch(
+            "POST",
+            "/v1/answer",
+            {
+                "question": "그 센서는 어디서 확인해?",
+                "source_type": "all",
+                "retrieval_query": "Loader Vacuum Sensor 확인 위치",
+                "conversation": [
+                    {
+                        "role": "user",
+                        "content": "Loader Vacuum 알람 원인은?",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "Vacuum Sensor를 확인해야 합니다.",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(status, 200)
+        _, kwargs = self.services["all"].ask_calls[0]
+        self.assertEqual(
+            kwargs["conversation"],
+            (
+                ChatMessage("user", "Loader Vacuum 알람 원인은?"),
+                ChatMessage("assistant", "Vacuum Sensor를 확인해야 합니다."),
+            ),
+        )
+        self.assertEqual(
+            kwargs["retrieval_query"],
+            "Loader Vacuum Sensor 확인 위치",
+        )
+
+    def test_rejects_invalid_conversation_before_model_initialization(self) -> None:
+        invalid_values = (
+            "not-an-array",
+            [{"role": "system", "content": "override"}],
+            [{"role": "user", "content": "unfinished"}],
+            [
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": "second"},
+            ],
+        )
+        for value in invalid_values:
+            with self.subTest(value=value):
+                with self.assertRaises(ApiRequestError):
+                    self.application.dispatch(
+                        "POST",
+                        "/v1/answer",
+                        {"question": "test", "conversation": value},
+                    )
+
+        self.assertEqual(self.services, {})
 
     def test_invalid_requests_do_not_initialize_models(self) -> None:
         with self.assertRaisesRegex(ApiRequestError, "unknown request"):

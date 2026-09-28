@@ -78,11 +78,22 @@ Context를 필요로 할 때만 `include_content=true`로 지정합니다.
 ```json
 {
   "question": "Loader Vacuum 알람 원인과 복구 절차는?",
+  "retrieval_query": "Loader Vacuum 알람 원인 복구 절차",
   "source_type": "all",
   "top_k": 6,
   "temperature": 0.1,
   "max_tokens": 800,
   "include_content": false,
+  "conversation": [
+    {
+      "role": "user",
+      "content": "Loader Vacuum 알람 원인은?"
+    },
+    {
+      "role": "assistant",
+      "content": "Vacuum Sensor 상태가 주요 근거입니다."
+    }
+  ],
   "filters": {
     "document": {
       "unit": "Loader"
@@ -90,6 +101,15 @@ Context를 필요로 할 때만 `include_content=true`로 지정합니다.
   }
 }
 ```
+
+- `question`: 이번 Turn에서 사용자가 실제로 한 질문입니다.
+- `retrieval_query`: ContextManager가 대명사와 생략어를 해소한 검색용 질의입니다.
+  생략하면 `question`을 그대로 검색합니다.
+- `conversation`: 이전 대화의 `user`/`assistant` Message 배열입니다. `user`부터
+  교대로 배치하고 마지막은 `assistant`여야 하며 최대 20개 Message를 허용합니다.
+
+EquipmentRAG는 이 대화를 현재 요청의 이해에만 사용하며 Session을 저장하지 않습니다.
+Session ID, 장기 Memory, 만료와 삭제는 호출 측 ContextManager가 관리합니다.
 
 응답에는 `answer`, `model`, `finish_reason`, `usage`와 답변 생성에 제공된 `sources`가
 포함됩니다. 검색 결과가 없으면 LLM을 호출하지 않고 `finish_reason=no_context`를

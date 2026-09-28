@@ -15,12 +15,14 @@ from urllib.parse import urlsplit
 
 from app import __version__
 from app.config import AppConfig, ConfigError, load_config
+from app.llm.base import ChatMessage
 from app.rag_service import RagAnswer, RagError, RagService, RagSource, UnifiedSearchFilters
 from app.retrieval.document_retriever import DocumentSearchFilters
 from app.search import CodeSearchFilters
 
 
 _MAX_REQUEST_BYTES = 1_048_576
+_MAX_CONVERSATION_MESSAGES = 20
 _SOURCE_TYPES = {"code", "document", "all"}
 _WEB_ROOT = Path(__file__).with_name("web")
 _STATIC_ROUTES = {
@@ -67,6 +69,8 @@ class RetrievalService(Protocol):
         filters: object = None,
         temperature: float = 0.1,
         max_tokens: int | None = None,
+        conversation: tuple[ChatMessage, ...] = (),
+        retrieval_query: str | None = None,
     ) -> RagAnswer: ...
 
 
@@ -154,9 +158,16 @@ class ApiApplication:
                 "include_content",
                 "temperature",
                 "max_tokens",
+                "conversation",
+                "retrieval_query",
             },
         )
         question = _required_string(payload.get("question"), "question")
+        conversation = _conversation(payload.get("conversation"))
+        retrieval_query = _optional_string(
+            payload.get("retrieval_query"),
+            "retrieval_query",
+        )
         temperature = _number(payload.get("temperature", 0.1), "temperature")
         if not 0 <= temperature <= 2:
             raise ApiRequestError("temperature must be between 0 and 2")
@@ -169,6 +180,8 @@ class ApiApplication:
                 filters=filters,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                conversation=conversation,
+                retrieval_query=retrieval_query,
             )
         return HTTPStatus.OK, answer.to_dict(
             include_source_code=include_content
@@ -425,6 +438,37 @@ def _optional_string(value: object, name: str) -> str | None:
     if value is None:
         return None
     return _required_string(value, name)
+
+
+def _conversation(value: object) -> tuple[ChatMessage, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ApiRequestError("conversation must be a JSON array")
+    if len(value) > _MAX_CONVERSATION_MESSAGES:
+        raise ApiRequestError(
+            f"conversation must not exceed {_MAX_CONVERSATION_MESSAGES} messages"
+        )
+    messages: list[ChatMessage] = []
+    expected_role = "user"
+    for index, item in enumerate(value):
+        name = f"conversation[{index}]"
+        if not isinstance(item, Mapping):
+            raise ApiRequestError(f"{name} must be a JSON object")
+        _reject_unknown_keys(item, {"role", "content"}, prefix=name)
+        role = _required_string(item.get("role"), f"{name}.role")
+        if role not in {"user", "assistant"}:
+            raise ApiRequestError(f"{name}.role must be 'user' or 'assistant'")
+        if role != expected_role:
+            raise ApiRequestError(
+                "conversation messages must alternate user and assistant"
+            )
+        content = _required_string(item.get("content"), f"{name}.content")
+        messages.append(ChatMessage(role, content))
+        expected_role = "assistant" if role == "user" else "user"
+    if messages and messages[-1].role != "assistant":
+        raise ApiRequestError("conversation must end with an assistant message")
+    return tuple(messages)
 
 
 def _boolean(value: object, name: str) -> bool:
