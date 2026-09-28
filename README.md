@@ -1,7 +1,7 @@
 # EquipmentRAG
 
 Windows 폐쇄망에서 C# 설비 제어 Source와 기술 문서를 색인하고 로컬 LLM으로
-검색·분석하기 위한 RAG 시스템입니다. 현재 Release Candidate는 `0.3.0-rc.1`입니다.
+검색·분석하기 위한 RAG 시스템입니다. 현재 Release Candidate는 `0.3.0-rc.2`입니다.
 
 ## 현재 범위
 
@@ -36,7 +36,7 @@ python -m pip install --no-index --find-links=.\wheels -r requirements-offline.t
 ```
 
 Model과 Wheel은 GitHub에 올리지 않습니다. 1.9GB 분할 전송 Bundle 생성 방법과
-Release 검증 내용은 [`docs/RELEASE_0.3.0-rc.1.md`](docs/RELEASE_0.3.0-rc.1.md)를
+Release 검증 내용은 [`docs/RELEASE_0.3.0-rc.2.md`](docs/RELEASE_0.3.0-rc.2.md)를
 참고합니다.
 
 ## 설정
@@ -621,6 +621,10 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 - `GET /health`: 모델을 로드하지 않는 상태 확인
 - `POST /v1/retrieve`: LLM 없는 코드·문서 통합 근거 검색
 - `POST /v1/answer`: 로컬 LLM을 사용하는 근거 기반 답변
+
+`/v1/answer`는 외부 ContextManager가 전달하는 `conversation`과 대명사·생략어를
+해소한 `retrieval_query`를 지원합니다. EquipmentRAG 자체는 Session을 저장하지 않으며,
+영속 Memory와 Session 만료·삭제는 연결할 ContextManager의 책임으로 분리합니다.
 
 기본적으로 다른 PC에서 접근할 수 없는 `127.0.0.1`에만 바인딩합니다. 원격 바인딩은
 `--allow-remote` 없이는 거부되며, API 자체에는 인증이나 TLS가 없으므로 사내 Network에
