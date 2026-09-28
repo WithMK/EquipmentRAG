@@ -157,7 +157,7 @@ class UnifiedCliTests(unittest.TestCase):
         output = format_status(status)
 
         self.assertTrue(status["code_source"]["exists"])
-        self.assertEqual(status["version"], "0.3.0-rc.1")
+        self.assertEqual(status["version"], "0.3.0-rc.2")
         self.assertFalse(status["documents"]["enabled"])
         self.assertIsNone(status["documents"]["index"])
         self.assertIn("Document index: disabled", output)
