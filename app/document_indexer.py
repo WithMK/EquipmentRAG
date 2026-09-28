@@ -26,6 +26,7 @@ from app.ocr.tesseract import TesseractOcrProvider
 from app.parsers.document_parser import DocumentParseError
 from app.parsers.document_parsers import DocumentParserRegistry
 from app.parsers.document_scanner import DocumentScanError, DocumentScanner
+from app.retrieval.sqlite_fts import LexicalStoreError, SQLiteFtsStore
 from app.vectorstore.chroma_store import (
     PersistentChromaStore,
     VectorRecord,
@@ -99,6 +100,7 @@ class IncrementalDocumentIndexer:
         chunker: DocumentChunker | None = None,
         embedding: EmbeddingProvider | None = None,
         vector_store: DocumentVectorStoreProvider | None = None,
+        lexical_store: DocumentVectorStoreProvider | None = None,
         state_path: Path | None = None,
     ) -> None:
         document = _require_document_config(config)
@@ -112,6 +114,7 @@ class IncrementalDocumentIndexer:
         )
         self._embedding = embedding or LocalEmbeddingService(config.embedding)
         self._vector_store = vector_store
+        self._lexical_store = lexical_store
         self._state_path = state_path or _default_state_path(config, document)
 
     @property
@@ -182,6 +185,15 @@ class IncrementalDocumentIndexer:
 
         records_by_file = self._embed(prepared)
         deleted_count, upserted_count = self._persist(
+            prepared,
+            records_by_file,
+            previous,
+            state_exists,
+            effective_full,
+            deleted,
+            changed,
+        )
+        self._persist_lexical(
             prepared,
             records_by_file,
             previous,
@@ -358,6 +370,57 @@ class IncrementalDocumentIndexer:
             )
         return self._vector_store
 
+    def _persist_lexical(
+        self,
+        prepared: Sequence[
+            tuple[DocumentSourceFile, NormalizedDocument, list[DocumentChunk]]
+        ],
+        records_by_file: Mapping[str, list[VectorRecord]],
+        previous: DocumentIndexState,
+        state_exists: bool,
+        effective_full: bool,
+        deleted: Sequence[str],
+        changed: Sequence[str],
+    ) -> None:
+        store = self._get_lexical_store()
+        if store is None or (
+            not prepared and not deleted and state_exists and not effective_full
+        ):
+            return
+        old_ids: list[str] = []
+        try:
+            if effective_full and state_exists:
+                old_ids = [
+                    chunk_id
+                    for state in previous.files.values()
+                    for chunk_id in state.chunk_ids
+                ]
+            elif not state_exists:
+                store.delete_where({"equipment": self._config.equipment.name})
+            else:
+                for path in (*deleted, *changed):
+                    old_ids.extend(previous.files[path].chunk_ids)
+            if old_ids:
+                store.delete_by_ids(tuple(dict.fromkeys(old_ids)))
+            for source, _, _ in prepared:
+                records = records_by_file[source.relative_path]
+                if records:
+                    store.upsert(records)
+        except LexicalStoreError as exc:
+            raise DocumentIndexerError(
+                "Unable to synchronize document lexical index"
+            ) from exc
+
+    def _get_lexical_store(self) -> DocumentVectorStoreProvider | None:
+        if self._lexical_store is not None:
+            return self._lexical_store
+        if self._config.search.lexical_backend != "sqlite_fts5":
+            return None
+        if self._config.search.lexical_path is None:  # pragma: no cover
+            raise DocumentIndexerError("SQLite FTS5 lexical path is not configured")
+        self._lexical_store = SQLiteFtsStore(self._config.search.lexical_path)
+        return self._lexical_store
+
     def _load_state(self) -> tuple[DocumentIndexState, bool]:
         if not self._state_path.is_file():
             return (
@@ -492,6 +555,13 @@ def _settings_fingerprint(config: AppConfig, document: DocumentConfig) -> str:
         "normalize_embeddings": config.embedding.normalize_embeddings,
         "equipment": config.equipment.name,
         "collection_name": document.collection_name,
+        "lexical_backend": config.search.lexical_backend,
+        "lexical_path": (
+            str(config.search.lexical_path.resolve(strict=False))
+            if config.search.lexical_path is not None
+            else None
+        ),
+        "lexical_schema_version": 1,
         "visual": (
             {
                 "enabled": config.visual.enabled,

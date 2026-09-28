@@ -18,6 +18,7 @@ from app.config import (
     SourceConfig,
 )
 from app.document_indexer import DocumentIndexerError, IncrementalDocumentIndexer
+from app.retrieval.sqlite_fts import SQLiteFtsStore
 from app.vectorstore.chroma_store import VectorRecord
 
 
@@ -256,6 +257,46 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
         self.assertTrue(settings.full_reindex)
         self.assertEqual(settings.reindex_reason, "index_settings_changed")
         self.assertEqual(settings.reindexed_files, ("Alarm.txt", "Manual.md"))
+
+    def test_synchronizes_document_revision_to_sqlite_fts(self) -> None:
+        manual = self.documents / "Manual.md"
+        manual.write_text("# Alarm\n\nVacuum recovery procedure", encoding="utf-8")
+        sidecar = manual.with_name("Manual.md.metadata.yaml")
+        sidecar.write_text("revision: Rev.1\n", encoding="utf-8")
+        lexical = SQLiteFtsStore(self.root / "lexical.sqlite3")
+        config = replace(
+            self.config,
+            search=replace(
+                self.config.search,
+                lexical_backend="sqlite_fts5",
+                lexical_path=lexical.path,
+            ),
+        )
+        indexer = IncrementalDocumentIndexer(
+            config,
+            embedding=self.embedding,
+            vector_store=self.store,
+            lexical_store=lexical,
+            state_path=self.state_path,
+        )
+
+        indexer.run()
+        self.assertEqual(
+            len(lexical.search("Vacuum", 5, filters={"revision": "Rev.1"})),
+            1,
+        )
+
+        sidecar.write_text("revision: Rev.2\n", encoding="utf-8")
+        indexer.run()
+        self.assertEqual(
+            lexical.search("Vacuum", 5, filters={"revision": "Rev.1"}),
+            [],
+        )
+        self.assertEqual(
+            len(lexical.search("Vacuum", 5, filters={"revision": "Rev.2"})),
+            1,
+        )
+        lexical.close()
 
     def test_indexes_office_documents_with_exact_source_locations(self) -> None:
         from openpyxl import Workbook

@@ -267,6 +267,7 @@ class PersistentChromaStore:
         top_k: int,
         *,
         where: Mapping[str, Any] | None = None,
+        where_document: Mapping[str, Any] | None = None,
     ) -> list[SearchResult]:
         if isinstance(top_k, bool) or not isinstance(top_k, int) or top_k <= 0:
             raise VectorStoreError("top_k must be a positive integer")
@@ -280,6 +281,9 @@ class PersistentChromaStore:
                 query_embeddings=[embedding],
                 n_results=top_k,
                 where=dict(where) if where is not None else None,
+                where_document=(
+                    dict(where_document) if where_document is not None else None
+                ),
                 include=["documents", "metadatas", "distances"],
             )
         except Exception as exc:

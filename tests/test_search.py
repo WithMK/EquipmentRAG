@@ -52,6 +52,23 @@ class FakeStore:
         return self.results[:top_k]
 
 
+class ExactFakeStore(FakeStore):
+    def __init__(self, results: list[SearchResult]) -> None:
+        super().__init__(results)
+        self.exact_calls: list[dict[str, Any] | None] = []
+
+    def search(
+        self,
+        query_embedding: list[float],
+        top_k: int,
+        *,
+        where: dict[str, Any] | None = None,
+        where_document: dict[str, Any] | None = None,
+    ) -> list[SearchResult]:
+        self.exact_calls.append(where_document)
+        return self.results[:top_k]
+
+
 def _config(root: Path) -> AppConfig:
     return AppConfig(
         project_root=root,
@@ -157,6 +174,27 @@ class SemanticCodeSearchTests(unittest.TestCase):
                 ]
             },
         )
+
+    def test_exact_search_uses_independent_chroma_document_filters(self) -> None:
+        store = ExactFakeStore([_match()])
+        search = SemanticCodeSearch(
+            _config(self.root),
+            embedding=self.embedding,
+            vector_store=store,
+        )
+
+        results = search.search_exact(
+            "E-024 ServoAlarm",
+            ("E-024", "ServoAlarm"),
+            top_k=3,
+        )
+
+        self.assertEqual(
+            store.exact_calls,
+            [{"$contains": "E-024"}, {"$contains": "ServoAlarm"}],
+        )
+        self.assertEqual(len(results), 1)
+        self.assertEqual(self.embedding.queries, ["E-024 ServoAlarm"])
 
     def test_rejects_invalid_query_limit_and_filter(self) -> None:
         with self.assertRaisesRegex(SearchError, "query"):

@@ -17,6 +17,7 @@ from app.config import (
     SourceConfig,
 )
 from app.indexer import IncrementalSourceIndexer, IndexerError
+from app.retrieval.sqlite_fts import SQLiteFtsStore
 from app.vectorstore.chroma_store import VectorRecord
 
 
@@ -237,6 +238,41 @@ class IncrementalSourceIndexerTests(unittest.TestCase):
         self.assertTrue(settings.full_reindex)
         self.assertEqual(settings.reindex_reason, "index_settings_changed")
         self.assertEqual(settings.reindexed_files, ("Alarm.cs", "Axis.cs"))
+
+    def test_synchronizes_incremental_changes_to_sqlite_fts(self) -> None:
+        source = self._write("Alarm.cs", "ResetE024")
+        lexical = SQLiteFtsStore(self.root / "lexical.sqlite3")
+        config = replace(
+            self.config,
+            search=replace(
+                self.config.search,
+                lexical_backend="sqlite_fts5",
+                lexical_path=lexical.path,
+            ),
+        )
+        indexer = IncrementalSourceIndexer(
+            config,
+            embedding=self.embedding,
+            vector_store=self.store,
+            lexical_store=lexical,
+            state_path=self.state_path,
+        )
+
+        indexer.run()
+        self.assertEqual(lexical.search("ResetE024", 5)[0].metadata.method_name, "ResetE024")
+
+        self._write("Alarm.cs", "ClearServoFault")
+        indexer.run()
+        self.assertEqual(lexical.search("ResetE024", 5), [])
+        self.assertEqual(
+            lexical.search("ClearServoFault", 5)[0].metadata.method_name,
+            "ClearServoFault",
+        )
+
+        source.unlink()
+        indexer.run()
+        self.assertEqual(lexical.count(), 0)
+        lexical.close()
 
     def test_embedding_failure_preserves_existing_store_and_manifest(self) -> None:
         self._write("Axis.cs", "Home")

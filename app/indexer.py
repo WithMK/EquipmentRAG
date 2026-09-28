@@ -19,6 +19,7 @@ from app.parsers.csharp_parser import (
     CSharpSourceFile,
     CSharpSourceScanner,
 )
+from app.retrieval.sqlite_fts import LexicalStoreError, SQLiteFtsStore
 from app.vectorstore.chroma_store import (
     ChunkMetadata,
     PersistentChromaStore,
@@ -124,6 +125,7 @@ class IncrementalSourceIndexer:
         chunker: CSharpChunker | None = None,
         embedding: EmbeddingProvider | None = None,
         vector_store: VectorStoreProvider | None = None,
+        lexical_store: VectorStoreProvider | None = None,
         state_path: Path | None = None,
     ) -> None:
         self._config = config
@@ -134,6 +136,7 @@ class IncrementalSourceIndexer:
         )
         self._embedding = embedding or LocalEmbeddingService(config.embedding)
         self._vector_store = vector_store
+        self._lexical_store = lexical_store
         self._state_path = state_path or _default_state_path(config)
 
     @property
@@ -249,6 +252,37 @@ class IncrementalSourceIndexer:
                 if records:
                     upserted_chunk_count += store.upsert(records)
 
+            lexical_store = self._get_lexical_store()
+            if lexical_store is not None:
+                try:
+                    if reset_equipment:
+                        lexical_store.delete_by_equipment(
+                            self._config.equipment.name
+                        )
+                    else:
+                        for relative_path in deleted_files:
+                            lexical_store.delete_by_file_path(
+                                previous.files[relative_path].file_path,
+                                equipment=self._config.equipment.name,
+                            )
+                        for source, _ in prepared:
+                            old_state = previous.files.get(source.relative_path)
+                            file_path = (
+                                old_state.file_path
+                                if old_state is not None
+                                else str(source.path)
+                            )
+                            lexical_store.delete_by_file_path(
+                                file_path,
+                                equipment=self._config.equipment.name,
+                            )
+                    for source, _ in prepared:
+                        records = records_by_file[source.relative_path]
+                        if records:
+                            lexical_store.upsert(records)
+                except LexicalStoreError as exc:
+                    raise IndexerError("Unable to synchronize lexical index") from exc
+
         next_files: dict[str, IndexedFileState] = {
             path: previous.files[path] for path in skipped_files
         }
@@ -360,6 +394,16 @@ class IncrementalSourceIndexer:
                 self._embedding.dimension,
             )
         return self._vector_store
+
+    def _get_lexical_store(self) -> VectorStoreProvider | None:
+        if self._lexical_store is not None:
+            return self._lexical_store
+        if self._config.search.lexical_backend != "sqlite_fts5":
+            return None
+        if self._config.search.lexical_path is None:  # pragma: no cover
+            raise IndexerError("SQLite FTS5 lexical path is not configured")
+        self._lexical_store = SQLiteFtsStore(self._config.search.lexical_path)
+        return self._lexical_store
 
     def _load_state(self) -> tuple[IndexState, bool]:
         if not self._state_path.is_file():
@@ -479,6 +523,13 @@ def _settings_fingerprint(config: AppConfig) -> str:
         "normalize_embeddings": config.embedding.normalize_embeddings,
         "equipment": config.equipment.name,
         "collection_name": config.chromadb.collection_name,
+        "lexical_backend": config.search.lexical_backend,
+        "lexical_path": (
+            str(config.search.lexical_path.resolve(strict=False))
+            if config.search.lexical_path is not None
+            else None
+        ),
+        "lexical_schema_version": 1,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

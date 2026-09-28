@@ -61,6 +61,10 @@ search:
   candidate_multiplier: 4
   semantic_weight: 0.7
   lexical_weight: 0.3
+  exact_match_enabled: true
+  lexical_backend: sqlite_fts5
+  lexical_path: ./data/lexical/equipment_fts.db
+  rrf_k: 60
   reranker_model_path: null
   reranker_weight: 0.5
   reranker_device: null
