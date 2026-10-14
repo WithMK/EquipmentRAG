@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
+import hmac
 import threading
 from collections.abc import Callable, Mapping
 from http import HTTPStatus
@@ -19,6 +21,7 @@ from app.llm.base import ChatMessage
 from app.rag_service import RagAnswer, RagError, RagService, RagSource, UnifiedSearchFilters
 from app.retrieval.document_retriever import DocumentSearchFilters
 from app.search import CodeSearchFilters
+from app.ingestion import IngestionError, IngestionWorker, MAX_BODY_BYTES
 
 
 _MAX_REQUEST_BYTES = 1_048_576
@@ -85,6 +88,9 @@ class ApiApplication:
         config: AppConfig,
         *,
         service_factory: ServiceFactory | None = None,
+        ingestion_root: Path | None = None,
+        ingestion_key: str = "",
+        ingestion_indexer=None,
     ) -> None:
         self._config = config
         self._service_factory = service_factory or (
@@ -93,14 +99,60 @@ class ApiApplication:
         self._services: dict[str, RetrievalService] = {}
         self._service_lock = threading.Lock()
         self._request_lock = threading.Lock()
+        self.ingestion = None
+        self.ingestion_key = ingestion_key
+        if ingestion_root is not None:
+            if len(ingestion_key) < 24:
+                raise ApiRequestError('EQUIPMENT_RAG_INGESTION_KEY must contain at least 24 characters')
+            if not config.document or not config.document.enabled:
+                raise ApiRequestError('Document indexing must be enabled')
+            self.ingestion = IngestionWorker(config, ingestion_root, indexer=ingestion_indexer, request_lock=self._request_lock)
+
+    def authorize_ingestion(self, path, authorization):
+        if not urlsplit(path).path.startswith('/v1/ingestion/'):
+            return
+        if self.ingestion is None:
+            raise ApiRequestError('Document ingestion is disabled', status=404)
+        if not hmac.compare_digest(authorization.encode(), ('Bearer ' + self.ingestion_key).encode()):
+            raise ApiRequestError('Ingestion authentication required', status=401)
+
+    def _check_index_consistency(self, source_type, filters):
+        if self.ingestion is not None and source_type != 'code':
+            document_filters = filters.document if isinstance(filters, UnifiedSearchFilters) else filters
+            if self.ingestion.store.search_blocked(document_filters):
+                raise ApiRequestError('Document index recovery required; retry failed uploads in this search scope', status=503)
 
     def dispatch(
         self,
         method: str,
         path: str,
         payload: Mapping[str, Any] | None = None,
+        authorization: str = "",
     ) -> tuple[int, dict[str, Any]]:
         route = urlsplit(path).path.rstrip("/") or "/"
+        if route.startswith('/v1/ingestion/'):
+            self.authorize_ingestion(path, authorization)
+            parts = route.split('/')
+            try:
+                if len(parts) == 5 and parts[4] == 'documents':
+                    namespace = parts[3]
+                    if method == 'GET':
+                        return 200, {'documents': self.ingestion.store.list(namespace)}
+                    if method == 'POST':
+                        if isinstance(payload, dict) and not payload.get('equipment'):
+                            payload = {**payload, 'equipment': self._config.equipment.name}
+                        data = self.ingestion.store.submit(namespace, payload)
+                        self.ingestion.wake.set()
+                        return 202, data
+                if len(parts) == 7 and parts[4] == 'documents' and parts[6] == 'retry' and method == 'POST':
+                    if not isinstance(payload, Mapping) or set(payload) != {'version'}:
+                        raise IngestionError('version is required')
+                    data = self.ingestion.store.retry(parts[3], parts[5], payload['version'])
+                    self.ingestion.wake.set()
+                    return 202, data
+                raise IngestionError('Ingestion endpoint not found', 404)
+            except IngestionError as exc:
+                raise ApiRequestError(str(exc), status=exc.status) from exc
         if route == "/health":
             if method != "GET":
                 raise ApiRequestError(
@@ -137,6 +189,7 @@ class ApiApplication:
             query = _required_string(payload.get("query"), "query")
             service = self._service(source_type)
             with self._request_lock:
+                self._check_index_consistency(source_type, filters)
                 sources = service.retrieve(query, top_k=top_k, filters=filters)
             return HTTPStatus.OK, {
                 "query": query,
@@ -174,6 +227,7 @@ class ApiApplication:
         max_tokens = _optional_positive_int(payload.get("max_tokens"), "max_tokens")
         service = self._service(source_type)
         with self._request_lock:
+            self._check_index_consistency(source_type, filters)
             answer = service.ask(
                 question,
                 top_k=top_k,
@@ -224,6 +278,7 @@ class EquipmentRagRequestHandler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         try:
+            self.server.application.authorize_ingestion(self.path, self.headers.get('Authorization', ''))
             if self.command == "GET":
                 asset = load_static_asset(self.path)
                 if asset is not None:
@@ -235,6 +290,7 @@ class EquipmentRagRequestHandler(BaseHTTPRequestHandler):
                 self.command,
                 self.path,
                 payload,
+                authorization=self.headers.get('Authorization', ''),
             )
         except ApiRequestError as exc:
             status, response = exc.status, {"error": str(exc)}
@@ -262,7 +318,8 @@ class EquipmentRagRequestHandler(BaseHTTPRequestHandler):
             raise ApiRequestError("Content-Length is invalid") from exc
         if length <= 0:
             raise ApiRequestError("request body is empty")
-        if length > _MAX_REQUEST_BYTES:
+        limit = MAX_BODY_BYTES if urlsplit(self.path).path.startswith('/v1/ingestion/') else _MAX_REQUEST_BYTES
+        if length > limit:
             raise ApiRequestError(
                 "request body is too large",
                 status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -523,16 +580,23 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     allow_remote: bool = False,
+    ingestion_root: Path | None = None,
+    ingestion_key: str = "",
 ) -> None:
     validate_bind_address(host, allow_remote=allow_remote)
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ApiRequestError("port must be between 1 and 65535")
-    server = EquipmentRagHttpServer((host, port), ApiApplication(config))
+    application = ApiApplication(config, ingestion_root=ingestion_root, ingestion_key=ingestion_key)
+    server = EquipmentRagHttpServer((host, port), application)
     try:
+        if application.ingestion:
+            application.ingestion.start()
         print(f"EquipmentRAG API listening on http://{host}:{port}")
         server.serve_forever()
     finally:
         server.server_close()
+        if application.ingestion:
+            application.ingestion.close()
 
 
 def main() -> int:
@@ -541,6 +605,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--allow-remote", action="store_true")
+    parser.add_argument('--ingestion-root', type=Path, help='Enable durable document uploads in this private directory')
     args = parser.parse_args()
     try:
         config = load_config(args.config)
@@ -549,8 +614,10 @@ def main() -> int:
             host=args.host,
             port=args.port,
             allow_remote=args.allow_remote,
+            ingestion_root=args.ingestion_root,
+            ingestion_key=os.environ.get('EQUIPMENT_RAG_INGESTION_KEY', ''),
         )
-    except (ConfigError, ApiRequestError) as exc:
+    except (ConfigError, ApiRequestError, IngestionError) as exc:
         parser.error(str(exc))
     return 0
 

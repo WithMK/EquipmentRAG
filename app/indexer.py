@@ -256,9 +256,7 @@ class IncrementalSourceIndexer:
             if lexical_store is not None:
                 try:
                     if reset_equipment:
-                        lexical_store.delete_by_equipment(
-                            self._config.equipment.name
-                        )
+                        lexical_store.delete_where({'equipment': self._config.equipment.name, 'source_type': 'code'})
                     else:
                         for relative_path in deleted_files:
                             lexical_store.delete_by_file_path(

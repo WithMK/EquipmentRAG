@@ -151,7 +151,7 @@ class IncrementalDocumentIndexerTests(unittest.TestCase):
         first = self._indexer().run()
 
         self.assertEqual(first.new_files, ("Loader.md", "Trouble.txt"))
-        self.assertEqual(self.store.delete_filters, [{"equipment": "Trimming"}])
+        self.assertEqual(self.store.delete_filters, [])
         self.assertGreater(first.upserted_chunks, 0)
         metadata = next(
             record.metadata
