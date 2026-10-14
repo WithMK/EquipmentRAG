@@ -121,6 +121,24 @@ class IncrementalDocumentIndexer:
     def state_path(self) -> Path:
         return self._state_path
 
+    def prepare_records(self, source: DocumentSourceFile) -> list[VectorRecord]:
+        """Parse and embed one owned upload without scanning or deleting other files."""
+        prepared = self._prepare({source.relative_path: source}, [source.relative_path])
+        return self._embed(prepared)[source.relative_path]
+
+    def replace_records(self, records: Sequence[VectorRecord], owned_ids: set[str]) -> None:
+        """Retry-safe convergence of both indexes; caller journals owned IDs first."""
+        stale = tuple(owned_ids - {record.id for record in records})
+        for store in (self._get_vector_store(), self._get_lexical_store()):
+            if store is not None:
+                store.upsert(records)
+                if stale:
+                    store.delete_by_ids(stale)
+
+    def close(self) -> None:
+        if self._lexical_store is not None and hasattr(self._lexical_store, 'close'):
+            self._lexical_store.close()
+
     def run(self, *, dry_run: bool = False, full_reindex: bool = False) -> IndexReport:
         try:
             sources = self._scanner.scan()
@@ -341,11 +359,7 @@ class IncrementalDocumentIndexer:
             old_ids = [
                 chunk_id for state in previous.files.values() for chunk_id in state.chunk_ids
             ]
-        elif not state_exists:
-            deleted_count += store.delete_where(
-                {"equipment": self._config.equipment.name}
-            )
-        else:
+        elif state_exists:
             for path in (*deleted, *changed):
                 old_ids.extend(previous.files[path].chunk_ids)
         if old_ids:
@@ -395,9 +409,7 @@ class IncrementalDocumentIndexer:
                     for state in previous.files.values()
                     for chunk_id in state.chunk_ids
                 ]
-            elif not state_exists:
-                store.delete_where({"equipment": self._config.equipment.name})
-            else:
+            elif state_exists:
                 for path in (*deleted, *changed):
                     old_ids.extend(previous.files[path].chunk_ids)
             if old_ids:

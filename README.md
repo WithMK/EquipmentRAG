@@ -1,7 +1,11 @@
 # EquipmentRAG
 
 Windows 폐쇄망에서 C# 설비 제어 Source와 기술 문서를 색인하고 로컬 LLM으로
-검색·분석하기 위한 RAG 시스템입니다. 현재 Release Candidate는 `0.3.0-rc.2`입니다.
+검색·분석하기 위한 RAG 시스템입니다. 현재 개발본은 `0.3.0-rc.3`입니다.
+
+[자료 등록·자동 인덱싱](docs/MANAGED_INGESTION.md): A/O가 전달한 파일을 영속 대기열로
+접수해 기존 문서 검색 인덱스에 반영합니다. `--ingestion-root`와 별도 인증 키로 활성화합니다.
+기존 오프라인 배포 Bundle 문서는 rc.2 기준이며 새 코드가 포함된 Bundle은 별도 생성해야 합니다.
 
 ## 현재 범위
 
