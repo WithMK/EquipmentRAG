@@ -58,6 +58,29 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(self.fts.search('newtoken', 5, filters={'project': 'beta'}), [])
         self.assertEqual(self.vector.delete_filters, [])
 
+    def test_namespace_summary_tracks_indexing_lifecycle_and_authentication(self):
+        first = self.store.submit('alpha', payload())
+        self.store.submit('beta', payload())
+        summary = self.store.summary('alpha')
+        self.assertEqual(summary['counts']['queued'], 1)
+        self.assertEqual(summary['needs_indexing'], 1)
+        self.assertFalse(summary['folder_scan_included'])
+        self.worker.process_one()
+        summary = self.store.summary('alpha')
+        self.assertEqual(summary['counts']['ready'], 1)
+        self.assertEqual(summary['needs_indexing'], 0)
+        self.store.action('alpha', first['id'], 1, 'exclude')
+        self.assertEqual(self.store.summary('alpha')['needs_indexing'], 0)
+        key = 'test-ingestion-key-0123456789'
+        api = ApiApplication(self.config, ingestion_root=self.store.root, ingestion_key=key,
+                             ingestion_indexer=self.indexer, service_factory=lambda *args: _FakeService())
+        with self.assertRaises(ApiRequestError):
+            api.dispatch('GET', '/v1/ingestion/alpha/summary')
+        status, result = api.dispatch('GET', '/v1/ingestion/alpha/summary', authorization='Bearer '+key)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['registered'], 1)
+        self.assertEqual(api.dispatch('GET', '/v1/ingestion/empty/summary', authorization='Bearer '+key)[1]['registered'], 0)
+
     def test_prepare_failure_retains_old_content_and_explicit_retry(self):
         self.store.submit('alpha', payload())
         self.worker.process_one()

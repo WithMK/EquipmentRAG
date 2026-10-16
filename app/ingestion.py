@@ -111,6 +111,18 @@ class IngestionStore:
     def public(data):
         return {k: v for k, v in data.items() if k not in {'chunk_ids', 'pending_ids'}}
 
+    def summary(self, namespace):
+        documents = self.list(namespace)
+        counts = {status: 0 for status in ('queued', 'indexing', 'ready', 'failed', 'excluded', 'deleted')}
+        for item in documents:
+            counts[item['status']] = counts.get(item['status'], 0) + 1
+        required = [item for item in documents if item['desired_state'] == 'active' and
+                    (item['status'] in {'queued', 'indexing', 'failed'} or item['indexed_sha256'] != item['sha256'])]
+        return dict(namespace=namespace, observed_at=_now(), scope='managed_documents',
+                    counts=counts, registered=len(documents) - counts['deleted'],
+                    needs_indexing=len(required), chunks=sum(item['chunks'] for item in documents),
+                    folder_scan_included=False)
+
     def search_blocked(self, filters):
         """Fail closed for scopes whose two indexes may contain a partial write."""
         with closing(self.connect()) as db:
