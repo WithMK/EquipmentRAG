@@ -144,10 +144,14 @@ class ApiApplication:
                         data = self.ingestion.store.submit(namespace, payload)
                         self.ingestion.wake.set()
                         return 202, data
-                if len(parts) == 7 and parts[4] == 'documents' and parts[6] == 'retry' and method == 'POST':
+                if len(parts) == 7 and parts[4] == 'documents' and parts[6] in {'retry', 'exclude', 'restore', 'delete', 'reindex'} and method == 'POST':
                     if not isinstance(payload, Mapping) or set(payload) != {'version'}:
                         raise IngestionError('version is required')
-                    data = self.ingestion.store.retry(parts[3], parts[5], payload['version'])
+                    with self._request_lock:
+                        if parts[6] == 'retry':
+                            data = self.ingestion.store.retry(parts[3], parts[5], payload['version'])
+                        else:
+                            data = self.ingestion.store.action(parts[3], parts[5], payload['version'], parts[6])
                     self.ingestion.wake.set()
                     return 202, data
                 raise IngestionError('Ingestion endpoint not found', 404)

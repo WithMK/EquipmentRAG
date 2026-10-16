@@ -187,6 +187,125 @@ class IngestionTests(unittest.TestCase):
         self.assertEqual(data['documents'][0]['status'], 'ready')
         self.assertNotIn('content_base64', str(data))
 
+    def test_exclude_restore_reindex_delete_and_original_retention(self):
+        doc = self.store.submit('alpha', payload())
+        self.worker.process_one()
+        excluded = self.store.action('alpha', doc['id'], 1, 'exclude')
+        self.assertTrue(self.store.search_blocked(DocumentSearchFilters(project='alpha')))
+        self.worker.process_one()
+        self.assertEqual(self.store.list('alpha')[0]['status'], 'excluded')
+        self.assertEqual(self.fts.count(), 0)
+        self.assertFalse(self.vector.records)
+        with closing(self.store.connect()) as db:
+            self.assertTrue(db.execute('SELECT content FROM documents').fetchone()[0])
+        with self.assertRaises(IngestionError):
+            self.store.action('alpha', doc['id'], excluded['version'], 'reindex')
+        restored = self.store.action('alpha', doc['id'], excluded['version'], 'restore')
+        self.worker.process_one()
+        self.assertEqual(self.fts.count(), 1)
+        self.assertFalse(self.store.search_blocked(DocumentSearchFilters(project='alpha')))
+        call_count = len(self.embedding.calls)
+        reindexed = self.store.action('alpha', doc['id'], restored['version'], 'reindex')
+        self.worker.process_one()
+        self.assertEqual(len(self.embedding.calls), call_count + 1)
+        removed = self.store.action('alpha', doc['id'], reindexed['version'], 'delete')
+        self.worker.process_one()
+        self.assertEqual(self.store.list('alpha')[0]['status'], 'deleted')
+        self.assertEqual(self.fts.count(), 0)
+        with closing(self.store.connect()) as db:
+            self.assertEqual(db.execute('SELECT content FROM documents').fetchone()[0], b'')
+        with self.assertRaises(IngestionError):
+            self.store.action('alpha', doc['id'], removed['version'], 'restore')
+        # Manual explicit re-upload with the current version creates fresh stored content.
+        self.store.submit('alpha', payload(version=removed['version']))
+        self.worker.process_one()
+        self.assertEqual(self.store.list('alpha')[0]['status'], 'ready')
+
+    def test_partial_deletion_retry_and_project_ownership(self):
+        doc = self.store.submit('alpha', payload())
+        self.worker.process_one()
+        with self.assertRaises(IngestionError):
+            self.store.action('beta', doc['id'], 1, 'delete')
+        delete = self.store.action('alpha', doc['id'], 1, 'delete')
+        with self.assertRaises(IngestionError):
+            self.store.action('alpha', doc['id'], 1, 'exclude')
+        original = self.fts.delete_by_ids
+        def fail(ids):
+            raise RuntimeError('synthetic FTS failure')
+        self.fts.delete_by_ids = fail
+        with self.assertLogs(level='ERROR'):
+            self.worker.process_one()
+        self.assertEqual(self.store.list('alpha')[0]['status'], 'failed')
+        self.assertTrue(self.store.search_blocked(DocumentSearchFilters(project='alpha')))
+        with closing(self.store.connect()) as db:
+            self.assertTrue(db.execute('SELECT content FROM documents').fetchone()[0])
+        self.fts.delete_by_ids = original
+        self.store.retry('alpha', doc['id'], delete['version'])
+        self.worker.process_one()
+        self.assertEqual(self.fts.count(), 0)
+        self.assertFalse(self.store.search_blocked(DocumentSearchFilters(project='alpha')))
+
+    def test_watched_identity_tombstone_and_exclusion_survive_updates(self):
+        first = self.store.submit('alpha', payload(source_key='watch:folder:' + 'a'*64))
+        self.worker.process_one()
+        second = self.store.submit('alpha', payload(source_key='watch:folder:' + 'b'*64))
+        self.worker.process_one()
+        self.assertNotEqual(first['id'], second['id'])
+        self.store.action('alpha', first['id'], 1, 'exclude')
+        self.worker.process_one()
+        calls = len(self.embedding.calls)
+        self.store.submit('alpha', payload('new content', source_key='watch:folder:' + 'a'*64, version=2))
+        self.worker.process_one()
+        excluded = next(d for d in self.store.list('alpha') if d['id'] == first['id'])
+        self.assertEqual(excluded['status'], 'excluded')
+        self.assertEqual(calls, len(self.embedding.calls))
+        self.store.action('alpha', first['id'], 3, 'delete')
+        self.worker.process_one()
+        with self.assertRaises(IngestionError):
+            self.store.submit('alpha', payload('new content', source_key='watch:folder:' + 'a'*64, version=4))
+        self.assertEqual(self.fts.count(), 1)
+
+    def test_schema_v1_migration_and_interrupted_exclusion(self):
+        doc = self.store.submit('alpha', payload())
+        self.worker.process_one()
+        with closing(self.store.connect()) as db, db:
+            data = json.loads(db.execute('SELECT data FROM documents').fetchone()[0])
+            for key in ('operation', 'desired_state', 'source_key'):
+                data.pop(key)
+            self.store.save(db, data)
+            db.execute('PRAGMA user_version=1')
+        migrated = IngestionStore(self.store.root)
+        self.assertEqual(migrated.list('alpha')[0]['desired_state'], 'active')
+        migrated.action('alpha', doc['id'], 1, 'exclude')
+        with closing(migrated.connect()) as db, db:
+            data = json.loads(db.execute('SELECT data FROM documents').fetchone()[0])
+            data['status'] = 'indexing'
+            migrated.save(db, data)
+        self.worker.start()
+        for _ in range(100):
+            if migrated.list('alpha')[0]['status'] == 'excluded':
+                break
+            time.sleep(.01)
+        self.assertEqual(migrated.list('alpha')[0]['status'], 'excluded')
+        self.assertEqual(self.fts.count(), 0)
+
+    def test_lifecycle_api_auth_version_and_scope(self):
+        app = ApiApplication(self.config, service_factory=lambda *_: _FakeService())
+        app.ingestion, app.ingestion_key = self.worker, 'key'
+        doc = self.store.submit('alpha', payload())
+        self.worker.process_one()
+        path = '/v1/ingestion/alpha/documents/' + doc['id'] + '/exclude'
+        with self.assertRaises(ApiRequestError) as error:
+            app.dispatch('POST', path, {'version':1})
+        self.assertEqual(error.exception.status, 401)
+        status, data = app.dispatch('POST', path, {'version':1}, 'Bearer key')
+        self.assertEqual(status, 202)
+        with self.assertRaises(ApiRequestError) as error:
+            app.dispatch('POST', '/v1/retrieve', {'query':'E-024', 'source_type':'document'})
+        self.assertEqual(error.exception.status, 503)
+        self.worker.process_one()
+        self.assertEqual(self.store.list('alpha')[0]['status'], 'excluded')
+
 
 if __name__ == '__main__':
     unittest.main()

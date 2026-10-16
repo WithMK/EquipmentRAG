@@ -41,7 +41,7 @@ def _text(value, name, limit=200):
 
 
 def validate_upload(payload):
-    if not isinstance(payload, dict) or set(payload) - {'filename', 'content_base64', 'project', 'equipment', 'version'}:
+    if not isinstance(payload, dict) or set(payload) - {'filename', 'content_base64', 'project', 'equipment', 'version', 'source_key'}:
         raise IngestionError('Invalid upload fields')
     filename = _text(payload.get('filename'), 'filename', 180)
     if re.search(r'[\\/:*?"<>|]', filename) or filename.endswith(('.', ' ')) or filename.startswith('.'):
@@ -79,11 +79,19 @@ class IngestionStore:
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / 'ingestion.db'
         with closing(self.connect()) as db, db:
-            if db.execute('PRAGMA user_version').fetchone()[0] not in (0, 1):
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('PRAGMA user_version').fetchone()[0] not in (0, 1, 2):
                 raise IngestionError('Unsupported ingestion schema')
             db.execute('CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, data TEXT NOT NULL, content BLOB NOT NULL)')
             db.execute('CREATE INDEX IF NOT EXISTS document_namespace ON documents(namespace)')
-            db.execute('PRAGMA user_version=1')
+            db.execute('CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY, document_id TEXT NOT NULL, action TEXT NOT NULL, version INTEGER NOT NULL, created_at TEXT NOT NULL)')
+            for identity, raw in db.execute('SELECT id,data FROM documents').fetchall():
+                data = json.loads(raw)
+                data.setdefault('desired_state', 'active')
+                data.setdefault('operation', 'index')
+                data.setdefault('source_key', '')
+                self.save(db, data)
+            db.execute('PRAGMA user_version=2')
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=10)
@@ -118,8 +126,11 @@ class IngestionStore:
     def submit(self, namespace, payload):
         self.namespace(namespace)
         filename, content, project, equipment, version = validate_upload(payload)
+        source_key = payload.get('source_key', '')
+        if not isinstance(source_key, str) or (source_key and not re.fullmatch(r'watch:[a-zA-Z0-9_-]{1,64}:[a-f0-9]{64}', source_key)):
+            raise IngestionError('Invalid source_key')
         digest = hashlib.sha256(content).hexdigest()
-        identity = hashlib.sha256((namespace + '\0' + filename.casefold()).encode()).hexdigest()
+        identity = hashlib.sha256((namespace + '\0' + (source_key or filename.casefold())).encode()).hexdigest()
         with closing(self.connect()) as db, db:
             db.execute('BEGIN IMMEDIATE')
             row = db.execute('SELECT data FROM documents WHERE id=?', (identity,)).fetchone()
@@ -127,17 +138,52 @@ class IngestionStore:
             if old:
                 if old['project'] != project or old['equipment'] != equipment:
                     raise IngestionError('Document search binding cannot change', 409)
-                if old['sha256'] == digest:
+                if old['status'] == 'deleted' and source_key:
+                    raise IngestionError('Deleted watched files require a new source identity', 409)
+                if old['sha256'] == digest and old['status'] != 'deleted':
                     return self.public(old)
                 if old['status'] in {'queued', 'indexing'} or version != old['version']:
                     raise IngestionError('Document changed or is busy; refresh before replacing', 409)
             elif version:
                 raise IngestionError('Document no longer exists', 409)
+            desired = old['desired_state'] if old and old['desired_state'] != 'deleted' else 'active'
+            if old and old['desired_state'] == 'deleted' and old['status'] != 'deleted':
+                raise IngestionError('Finish or retry deletion before uploading', 409)
             data = dict(id=identity, namespace=namespace, filename=filename, project=project, equipment=equipment,
+                        source_key=source_key, desired_state=desired, operation='index' if desired == 'active' else 'exclude',
                         sha256=digest, size=len(content), status='queued', error='', version=(old['version'] + 1 if old else 1),
                         chunks=0, indexed_sha256=old['indexed_sha256'] if old else '', updated_at=_now(),
                         chunk_ids=old['chunk_ids'] if old else [], pending_ids=old['pending_ids'] if old else [])
             db.execute('INSERT OR REPLACE INTO documents VALUES(?,?,?,?)', (identity, namespace, json.dumps(data), content))
+            self.event(db, data, 'upload')
+        return self.public(data)
+
+    def action(self, namespace, identity, version, action):
+        self.namespace(namespace)
+        if action not in {'exclude', 'restore', 'delete', 'reindex'}:
+            raise IngestionError('Unknown document action')
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT data FROM documents WHERE id=? AND namespace=?', (identity, namespace)).fetchone()
+            if not row:
+                raise IngestionError('Document not found', 404)
+            data = json.loads(row[0])
+            if type(version) is not int or version != data['version'] or data['status'] in {'queued', 'indexing', 'deleted'}:
+                raise IngestionError('Document changed, is busy, or has been deleted', 409)
+            if data['desired_state'] == 'deleted' and action != 'delete':
+                raise IngestionError('Retry the pending deletion', 409)
+            if action == 'restore' and data['desired_state'] != 'excluded':
+                raise IngestionError('Only excluded documents can be restored', 409)
+            if action == 'reindex' and data['desired_state'] != 'active':
+                raise IngestionError('Restore excluded documents before reindexing', 409)
+            desired = {'exclude':'excluded', 'delete':'deleted'}.get(action, 'active')
+            data.update(desired_state=desired, operation=action if action in {'exclude', 'delete'} else 'index',
+                        status='queued', error='', version=data['version'] + 1, updated_at=_now())
+            if desired != 'active':
+                # Block the affected API search scope immediately, until removal completes.
+                data['pending_ids'] = sorted(set(data['pending_ids']) | set(data['chunk_ids']))
+            self.save(db, data)
+            self.event(db, data, action)
         return self.public(data)
 
     def retry(self, namespace, identity, version):
@@ -152,7 +198,13 @@ class IngestionStore:
                 raise IngestionError('Only the current failed version can be retried', 409)
             data.update(status='queued', error='', updated_at=_now())
             self.save(db, data)
+            self.event(db, data, 'retry')
         return self.public(data)
+
+    @staticmethod
+    def event(db, data, action):
+        db.execute('INSERT INTO events(document_id,action,version,created_at) VALUES(?,?,?,?)',
+                   (data['id'], action, data['version'], _now()))
 
     @staticmethod
     def save(db, data):
@@ -237,6 +289,9 @@ class IngestionWorker:
         try:
             if self.indexer is None:
                 self.indexer = IncrementalDocumentIndexer(self.config)
+            if data['operation'] in {'exclude', 'delete'}:
+                self._remove(data)
+                return True
             with tempfile.TemporaryDirectory(dir=self.store.root) as directory:
                 path = Path(directory) / data['filename']
                 path.write_bytes(content)
@@ -260,3 +315,17 @@ class IngestionWorker:
         with closing(self.store.connect()) as db, db:
             self.store.save(db, data)
         return True
+
+    def _remove(self, data):
+        data['pending_ids'] = sorted(set(data['chunk_ids']) | set(data['pending_ids']))
+        with closing(self.store.connect()) as db, db:
+            self.store.save(db, data)
+        with self.request_lock:
+            self.indexer.delete_records(data['pending_ids'])
+            data.update(status='deleted' if data['operation'] == 'delete' else 'excluded', error='',
+                        chunks=0, chunk_ids=[], pending_ids=[], indexed_sha256='', updated_at=_now())
+            with closing(self.store.connect()) as db, db:
+                if data['status'] == 'deleted':
+                    db.execute("UPDATE documents SET content=X'' WHERE id=?", (data['id'],))
+                self.store.save(db, data)
+                self.store.event(db, data, data['status'])
