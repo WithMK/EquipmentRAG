@@ -139,6 +139,14 @@ class IncrementalDocumentIndexer:
         if self._lexical_store is not None and hasattr(self._lexical_store, 'close'):
             self._lexical_store.close()
 
+    def delete_records(self, owned_ids: Sequence[str]) -> None:
+        """Remove only journal-owned chunks from both search indexes."""
+        if not owned_ids:
+            return
+        for store in (self._get_vector_store(), self._get_lexical_store()):
+            if store is not None:
+                store.delete_by_ids(owned_ids)
+
     def run(self, *, dry_run: bool = False, full_reindex: bool = False) -> IndexReport:
         try:
             sources = self._scanner.scan()
