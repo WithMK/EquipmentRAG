@@ -37,6 +37,7 @@ python -m app.api --config config/config.yaml --ingestion-root D:\EquipmentRAG-d
 | API | 용도 |
 | --- | --- |
 | `GET /v1/ingestion/{namespace}/documents` | 해당 namespace 자료·상태 목록 |
+| `GET /v1/ingestion/{namespace}/summary` | 등록 문서의 상태별 수·갱신 필요 수·Chunk 수 |
 | `POST /v1/ingestion/{namespace}/documents` | 업로드·동일 파일 확인·변경 파일 교체; 202 |
 | `POST /v1/ingestion/{namespace}/documents/{id}/retry` | 실패한 현재 버전 재시도; 202 |
 
@@ -44,6 +45,19 @@ python -m app.api --config config/config.yaml --ingestion-root D:\EquipmentRAG-d
 사용합니다. `equipment`가 비어 있으면 RAG 설정의 기본 값을 사용합니다.
 새 파일은 `version: 0`, 교체는 목록에서 확인한 현재 버전을 보냅니다.
 재시도 본문은 `{"version": 1}`입니다. namespace는 영문·숫자·`_`·`-`, 1~100자입니다.
+
+summary의 counts는 queued/indexing/ready/failed/excluded/deleted입니다. registered는
+삭제 완료를 제외한 등록 문서 수이며, needs_indexing은 검색 사용 의도인 문서 중
+대기·처리 중·실패 또는 원본과 색인 해시가 다른 문서 수입니다. 기존 색인이 남아 있는
+실패 문서도 재처리 대상으로 계산합니다. 제외/삭제 작업은 처리 상태에는 나타나지만
+needs_indexing에 포함하지 않습니다. observed_at은 집계 시각이며 진행률 예측이 아닙니다.
+조회는 읽기 전용이고 ingestion key 인증을 유지합니다.
+
+RAG summary는 업로드 작업 큐에 접수된 문서만 집계합니다(folder_scan_included=false).
+아직 접수하지 않은 폴더 파일은 알 수 없습니다. Hermes의 프로젝트 집계는 감시 폴더의
+마지막 점검 결과와 합쳐 표시합니다. CLI 문서/코드 색인의 변경 예정 수는 각각
+`python -m app.document_indexer --config config/config.yaml --dry-run`,
+`python -m app.indexer --config config/config.yaml --dry-run`으로 별도 확인하세요.
 경로·서버 URL·실행 명령을 파일 이름으로 전달할 수 없습니다.
 
 - 지원: MD, TXT, PDF, DOCX, PPTX, XLSX. 파일당 1 byte~10 MiB, JSON 최대 14 MiB.

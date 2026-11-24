@@ -134,6 +134,8 @@ class ApiApplication:
             self.authorize_ingestion(path, authorization)
             parts = route.split('/')
             try:
+                if len(parts) == 5 and parts[4] == 'summary' and method == 'GET':
+                    return 200, self.ingestion.store.summary(parts[3])
                 if len(parts) == 5 and parts[4] == 'documents':
                     namespace = parts[3]
                     if method == 'GET':
