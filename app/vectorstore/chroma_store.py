@@ -239,12 +239,16 @@ class PersistentChromaStore:
         validated = self._validate_records(records)
         collection = self._get_collection()
         try:
-            collection.upsert(
-                ids=[record.id for record, _ in validated],
-                documents=[record.document for record, _ in validated],
-                embeddings=[embedding for _, embedding in validated],
-                metadatas=[record.metadata.to_chroma() for record, _ in validated],
-            )
+            batch_size = self._request_batch_size()
+            # Validate the whole input before the first write, then preserve row alignment.
+            for start in range(0, len(validated), batch_size):
+                batch = validated[start:start + batch_size]
+                collection.upsert(
+                    ids=[record.id for record, _ in batch],
+                    documents=[record.document for record, _ in batch],
+                    embeddings=[embedding for _, embedding in batch],
+                    metadatas=[record.metadata.to_chroma() for record, _ in batch],
+                )
         except Exception as exc:
             raise VectorStoreError("Unable to upsert ChromaDB records") from exc
         return len(validated)
@@ -252,14 +256,18 @@ class PersistentChromaStore:
     def get_by_ids(self, ids: Sequence[str]) -> list[StoredRecord]:
         validated_ids = self._validate_ids(ids)
         collection = self._get_collection()
+        records = []
         try:
-            payload = collection.get(
-                ids=validated_ids,
-                include=["documents", "metadatas"],
-            )
+            batch_size = self._request_batch_size()
+            for start in range(0, len(validated_ids), batch_size):
+                payload = collection.get(
+                    ids=validated_ids[start:start + batch_size],
+                    include=["documents", "metadatas"],
+                )
+                records.extend(self._parse_stored_records(payload))
         except Exception as exc:
             raise VectorStoreError("Unable to read ChromaDB records") from exc
-        return self._parse_stored_records(payload)
+        return records
 
     def search(
         self,
@@ -293,13 +301,25 @@ class PersistentChromaStore:
     def delete_by_ids(self, ids: Sequence[str]) -> int:
         validated_ids = self._validate_ids(ids)
         collection = self._get_collection()
+        deleted = 0
         try:
-            existing = collection.get(ids=validated_ids, include=[])["ids"]
-            if existing:
-                collection.delete(ids=list(existing))
+            batch_size = self._request_batch_size()
+            for start in range(0, len(validated_ids), batch_size):
+                existing = collection.get(ids=validated_ids[start:start + batch_size], include=[])["ids"]
+                if existing:
+                    collection.delete(ids=list(existing))
+                    deleted += len(existing)
         except Exception as exc:
             raise VectorStoreError("Unable to delete ChromaDB records") from exc
-        return len(existing)
+        return deleted
+
+    def _request_batch_size(self) -> int:
+        # Chroma >=1.5 exposes the backend's actual request limit. Do not hard-code
+        # the observed 5,461: SQLite/backend limits differ across deployments.
+        size = self._client.get_max_batch_size()
+        if type(size) is not int or size <= 0:
+            raise VectorStoreError('ChromaDB returned an invalid maximum batch size')
+        return size
 
     def delete_by_file_path(
         self, file_path: str, *, equipment: str | None = None

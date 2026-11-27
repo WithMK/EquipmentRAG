@@ -4,6 +4,7 @@ import gc
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from app.config import ChromaConfig
@@ -127,6 +128,17 @@ class ChromaStoreTests(unittest.TestCase):
         self.assertEqual(restarted.count(), 2)
         self.assertIn("zAxis.Home", restarted.get_by_ids(["z-home"])[0].document)
         self.assertTrue((self.config.path / "chroma.sqlite3").is_file())
+
+    def test_multiple_request_batches_with_real_chroma(self):
+        store = self._store()
+        store.open()
+        records = [VectorRecord(str(i), f'text {i}', [1.,0.,0.], self._metadata('Batch.cs', i)) for i in range(5)]
+        with patch.object(store._client, 'get_max_batch_size', return_value=2):
+            self.assertEqual(store.upsert(records), 5)
+            self.assertEqual(len(store.get_by_ids([r.id for r in records])), 5)
+            self.assertEqual(store.delete_by_ids([r.id for r in records]), 5)
+        self.assertEqual(store.count(), 0)
+
 
     def test_delete_by_id_and_file_path(self) -> None:
         store = self._store()
